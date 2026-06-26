@@ -8,3 +8,16 @@ node_modules
 !.env.example
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Rust build output (also covered by src-tauri/.gitignore — explicit here as a safety net; it's ~4GB)
+/src-tauri/target
+
+# IDE
+.idea/
+
+# CI / portable build staging output
+/dist
+
+# Large, copyrighted sample addons — only used by the (auto-skipping) integration test
+/addons_tests
+
