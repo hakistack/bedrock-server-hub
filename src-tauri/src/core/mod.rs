@@ -10,6 +10,7 @@ pub mod server_installer;
 pub mod server_process;
 pub mod server_properties;
 pub mod server_validator;
+pub mod updater;
 pub mod world_manager;
 
 // Phase 3 adds: addon_parser, manifest_reader, addon_installer.

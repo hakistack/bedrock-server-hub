@@ -10,6 +10,7 @@
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
   import Select from '$lib/components/shared/Select.svelte';
   import Toasts from '$lib/components/shared/Toasts.svelte';
+  import UpdateBanner from '$lib/components/shared/UpdateBanner.svelte';
 
   let { children } = $props();
 
@@ -123,6 +124,9 @@
         </button>
       </div>
       {#if currentLabel}<span class="crumb">{currentLabel}</span>{/if}
+      <div class="topbar-right">
+        <UpdateBanner />
+      </div>
     </div>
     <div class="page">
       {@render children()}
@@ -290,6 +294,9 @@
     color: var(--text-muted);
     font-size: 13px;
     font-weight: 500;
+  }
+  .topbar-right {
+    margin-left: auto;
   }
   .page {
     flex: 1;

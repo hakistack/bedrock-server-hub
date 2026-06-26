@@ -22,6 +22,7 @@ import type {
 } from '$lib/types/download';
 import type { AddonInstallReport, AddonPackage, InstalledAddon } from '$lib/types/addon';
 import type { NetworkStatus } from '$lib/types/network';
+import type { UpdateInfo, UpdateProgress } from '$lib/types/update';
 
 /** Official Minecraft Bedrock Dedicated Server download page. */
 export const OFFICIAL_DOWNLOAD_PAGE =
@@ -53,6 +54,22 @@ export async function pickFile(
     filters: [{ name, extensions }],
   });
   return typeof result === 'string' ? result : null;
+}
+
+/** Open a native file picker allowing multiple files. */
+export async function pickFiles(
+  extensions: string[],
+  name: string,
+  title = 'Selecciona archivos',
+): Promise<string[]> {
+  const result = await open({
+    directory: false,
+    multiple: true,
+    title,
+    filters: [{ name, extensions }],
+  });
+  if (Array.isArray(result)) return result;
+  return typeof result === 'string' ? [result] : [];
 }
 
 /**
@@ -167,6 +184,12 @@ export const api = {
       selectedUuids: selectedUuids ?? null,
     }),
 
+  installAddons: (
+    serverId: string,
+    worldName: string,
+    items: { sourcePath: string; selectedUuids: string[] }[],
+  ) => invoke<AddonInstallReport>('install_addons', { serverId, worldName, items }),
+
   listInstalledAddons: (serverId: string) =>
     invoke<InstalledAddon[]>('list_installed_addons', { serverId }),
 
@@ -182,7 +205,18 @@ export const api = {
 
   assignFreePort: (serverId: string) =>
     invoke<NetworkStatus>('assign_free_port', { serverId }),
+
+  // --- Self-updater ---
+  checkForUpdate: () => invoke<UpdateInfo>('check_for_update'),
+
+  downloadAndInstallUpdate: (downloadUrl: string) =>
+    invoke<void>('download_and_install_update', { downloadUrl }),
 };
+
+/** Subscribe to self-update download progress. */
+export function onUpdateProgress(handler: (p: UpdateProgress) => void): Promise<UnlistenFn> {
+  return listen<UpdateProgress>('update://progress', (event) => handler(event.payload));
+}
 
 /** Subscribe to backup zip progress events. */
 export function onBackupProgress(

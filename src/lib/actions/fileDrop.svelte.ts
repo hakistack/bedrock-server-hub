@@ -45,8 +45,10 @@ export const fileDrop: Action<HTMLElement, FileDropParams> = (node, params) => {
         const hovering = within(payload.position.x, payload.position.y);
         current.onHover?.(false);
         if (!hovering) return;
-        const match = payload.paths.find((p) => matchesExt(p, current.extensions));
-        if (match) current.onDrop(match);
+        // Deliver every matching dropped file (supports batch drops).
+        for (const p of payload.paths.filter((p) => matchesExt(p, current.extensions))) {
+          current.onDrop(p);
+        }
       } else {
         // 'leave' / 'enter'
         current.onHover?.(false);

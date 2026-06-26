@@ -5,4 +5,5 @@ pub mod manifest;
 pub mod network;
 pub mod properties;
 pub mod server;
+pub mod update;
 pub mod world;

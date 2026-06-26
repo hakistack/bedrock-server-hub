@@ -5,4 +5,5 @@ pub mod network_commands;
 pub mod server_commands;
 pub mod server_create_commands;
 pub mod settings_commands;
+pub mod update_commands;
 pub mod world_commands;

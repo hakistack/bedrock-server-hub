@@ -1,6 +1,6 @@
 <script lang="ts">
   import { confirm } from '@tauri-apps/plugin-dialog';
-  import { api, pickFile } from '$lib/api/commands';
+  import { api, pickFiles } from '$lib/api/commands';
   import { fileDrop } from '$lib/actions/fileDrop.svelte';
   import Select from '$lib/components/shared/Select.svelte';
   import { serverStore } from '$lib/stores/server.store.svelte';
@@ -8,27 +8,26 @@
   import { errorMessage } from '$lib/util/error';
   import { formatDate } from '$lib/util/format';
   import type { World } from '$lib/types/world';
-  import type {
-    AddonInstallReport,
-    AddonPack,
-    AddonPackage,
-    InstalledAddon,
-  } from '$lib/types/addon';
+  import type { AddonInstallReport, AddonPack, InstalledAddon } from '$lib/types/addon';
 
-  let sourcePath = $state<string | null>(null);
-  let preview = $state<AddonPackage | null>(null);
+  interface StagedAddon {
+    sourcePath: string;
+    displayName: string;
+    packs: AddonPack[];
+    selected: Record<string, boolean>;
+  }
+
+  let staged = $state<StagedAddon[]>([]);
   let previewing = $state(false);
   let installing = $state(false);
   let dragHover = $state(false);
 
   let worlds = $state<World[]>([]);
+  let activeLevel = $state('');
   let selectedWorld = $state<string | null>(null);
   let installed = $state<InstalledAddon[]>([]);
   let report = $state<AddonInstallReport | null>(null);
   let loadedFor = $state<string | null>(null);
-
-  // Per-pack install selection, keyed by uuid (only supported packs).
-  let selected = $state<Record<string, boolean>>({});
 
   const server = $derived(serverStore.selected);
 
@@ -36,10 +35,27 @@
     return p.packType === 'behavior' || p.packType === 'resource';
   }
 
-  const supportedPacks = $derived(preview ? preview.packs.filter(isSupported) : []);
-  const selectedUuids = $derived(supportedPacks.filter((p) => selected[p.uuid]).map((p) => p.uuid));
+  // World options: existing worlds + the active level-name (which may not exist
+  // yet on a brand-new server — addons can be pre-seeded before world gen).
+  const worldOptions = $derived.by(() => {
+    const opts = worlds.map((w) => ({
+      value: w.name,
+      label: w.isActive ? `${w.name} (activo)` : w.name,
+    }));
+    if (activeLevel && !worlds.some((w) => w.name === activeLevel)) {
+      opts.unshift({ value: activeLevel, label: `${activeLevel} (se generará al iniciar)` });
+    }
+    return opts;
+  });
+
+  const totalSelected = $derived(
+    staged.reduce(
+      (sum, s) => sum + s.packs.filter((p) => isSupported(p) && s.selected[p.uuid]).length,
+      0,
+    ),
+  );
   const canInstall = $derived(
-    !!server && !!sourcePath && !!preview && !!selectedWorld && selectedUuids.length > 0 && !installing,
+    !!server && !!selectedWorld && totalSelected > 0 && !installing && !previewing,
   );
 
   $effect(() => {
@@ -51,61 +67,70 @@
     loadedFor = id;
     try {
       worlds = await api.listWorlds(id);
-      selectedWorld = worlds.find((w) => w.isActive)?.name ?? worlds[0]?.name ?? null;
+      const props = await api.readProperties(id);
+      activeLevel = props.find((p) => p.key === 'level-name')?.value ?? 'Bedrock level';
       installed = await api.listInstalledAddons(id);
+      // Default target: the active world (existing or to-be-generated).
+      selectedWorld = worlds.find((w) => w.isActive)?.name ?? activeLevel;
     } catch (err) {
       toasts.error(errorMessage(err));
     }
   }
 
-  async function chooseFile() {
-    if (previewing) return;
-    const path = await pickFile(
-      ['mcaddon', 'mcpack', 'zip'],
-      'Addon Bedrock',
-      'Selecciona un .mcaddon / .mcpack',
-    );
-    if (path) loadPreview(path);
+  async function addViaPicker() {
+    if (previewing || installing) return;
+    const paths = await pickFiles(['mcaddon', 'mcpack', 'zip'], 'Addons Bedrock');
+    await addPaths(paths);
   }
 
-  async function loadPreview(path: string) {
-    sourcePath = path;
-    report = null;
+  async function addPaths(paths: string[]) {
+    if (!paths.length) return;
     previewing = true;
-    preview = null;
-    selected = {};
     try {
-      preview = await api.previewAddon(path);
-      // Pre-select all supported packs.
-      const sel: Record<string, boolean> = {};
-      for (const p of preview.packs) {
-        if (isSupported(p)) sel[p.uuid] = true;
+      for (const path of paths) {
+        if (staged.some((s) => s.sourcePath === path)) continue;
+        try {
+          const pkg = await api.previewAddon(path);
+          const selected: Record<string, boolean> = {};
+          for (const p of pkg.packs) if (isSupported(p)) selected[p.uuid] = true;
+          staged.push({
+            sourcePath: path,
+            displayName: pkg.displayName,
+            packs: pkg.packs,
+            selected,
+          });
+        } catch (err) {
+          toasts.error(`${path.split(/[/\\]/).pop()}: ${errorMessage(err)}`);
+        }
       }
-      selected = sel;
-    } catch (err) {
-      sourcePath = null;
-      toasts.error(errorMessage(err));
     } finally {
       previewing = false;
     }
   }
 
-  function clearSelection() {
-    sourcePath = null;
-    preview = null;
-    report = null;
-    selected = {};
+  function removeStaged(sourcePath: string) {
+    staged = staged.filter((s) => s.sourcePath !== sourcePath);
   }
 
   async function install() {
-    if (!canInstall || !server || !sourcePath || !selectedWorld) return;
+    if (!canInstall || !server || !selectedWorld) return;
     installing = true;
     report = null;
     try {
-      report = await api.installAddon(server.id, selectedWorld, sourcePath, selectedUuids);
+      const items = staged
+        .map((s) => ({
+          sourcePath: s.sourcePath,
+          selectedUuids: s.packs
+            .filter((p) => isSupported(p) && s.selected[p.uuid])
+            .map((p) => p.uuid),
+        }))
+        .filter((i) => i.selectedUuids.length > 0);
+
+      report = await api.installAddons(server.id, selectedWorld, items);
       installed = await api.listInstalledAddons(server.id);
       const ok = report.results.filter((r) => r.status === 'installed' || r.status === 'updated').length;
-      toasts.success(`Addon instalado: ${ok} pack(s) en "${selectedWorld}".`);
+      toasts.success(`${ok} pack(s) instalados en "${selectedWorld}".`);
+      staged = [];
     } catch (err) {
       toasts.error(errorMessage(err));
     } finally {
@@ -139,7 +164,9 @@
 
 <header class="page-head">
   <h1>Addons</h1>
-  <p class="muted">Instala <span class="mono">.mcaddon</span> / <span class="mono">.mcpack</span> sin tocar JSON.</p>
+  <p class="muted">
+    Instala uno o varios <span class="mono">.mcaddon</span> / <span class="mono">.mcpack</span> de una vez.
+  </p>
 </header>
 
 {#if !server}
@@ -147,90 +174,81 @@
 {:else}
   <div class="grid">
     <section class="col">
-      <!-- Dropzone / selector -->
       <button
         class="card dropzone"
         class:busy={previewing}
         class:drag-hover={dragHover}
-        onclick={chooseFile}
+        onclick={addViaPicker}
         use:fileDrop={{
           extensions: ['mcaddon', 'mcpack', 'zip'],
-          onDrop: loadPreview,
+          onDrop: (p) => addPaths([p]),
           onHover: (h) => (dragHover = h),
         }}
       >
         <div class="dz-icon">🧩</div>
         {#if previewing}
-          <p>Analizando addon…</p>
+          <p>Analizando…</p>
         {:else if dragHover}
-          <p><strong>Suelta el archivo aquí</strong></p>
-        {:else if sourcePath}
-          <p class="mono small">{sourcePath}</p>
-          <p class="faint">Click o arrastra otro archivo</p>
+          <p><strong>Suelta los archivos aquí</strong></p>
         {:else}
-          <p><strong>Arrastra o selecciona un addon</strong></p>
-          <p class="faint">.mcaddon · .mcpack · .zip</p>
+          <p><strong>Arrastra o selecciona addons</strong></p>
+          <p class="faint">Puedes añadir varios · .mcaddon · .mcpack · .zip</p>
         {/if}
       </button>
 
-      <!-- Preview -->
-      {#if preview}
-        <div class="card">
-          <div class="row spread">
-            <div class="card-title" style="margin:0;">Contenido detectado · {preview.displayName}</div>
-            <button class="btn btn-sm" onclick={clearSelection}>Limpiar</button>
-          </div>
-          <div class="packs">
-            {#each preview.packs as p (p.uuid)}
-              {@const supported = p.packType === 'behavior' || p.packType === 'resource'}
-              <label class="pack" class:unsupported={!supported}>
-                <input
-                  type="checkbox"
-                  disabled={!supported}
-                  checked={supported && selected[p.uuid]}
-                  onchange={(e) => (selected[p.uuid] = (e.target as HTMLInputElement).checked)}
-                />
-                <div class="pack-body">
-                  <div class="pack-head">
-                    <span class="ptype {p.packType}">{packLabel[p.packType]}</span>
-                    <strong>{p.name}</strong>
-                    <span class="faint mono ver">v{p.version.join('.')}</span>
+      {#if staged.length}
+        {#each staged as s (s.sourcePath)}
+          <div class="card">
+            <div class="row spread">
+              <div class="card-title" style="margin:0;">{s.displayName}</div>
+              <button class="btn btn-sm" onclick={() => removeStaged(s.sourcePath)}>Quitar</button>
+            </div>
+            <div class="packs">
+              {#each s.packs as p (p.uuid)}
+                {@const supported = p.packType === 'behavior' || p.packType === 'resource'}
+                <label class="pack" class:unsupported={!supported}>
+                  <input
+                    type="checkbox"
+                    disabled={!supported}
+                    checked={supported && s.selected[p.uuid]}
+                    onchange={(e) => (s.selected[p.uuid] = (e.target as HTMLInputElement).checked)}
+                  />
+                  <div class="pack-body">
+                    <div class="pack-head">
+                      <span class="ptype {p.packType}">{packLabel[p.packType]}</span>
+                      <strong>{p.name}</strong>
+                      <span class="faint mono ver">v{p.version.join('.')}</span>
+                    </div>
+                    {#if p.description}<p class="muted small desc">{p.description}</p>{/if}
                   </div>
-                  {#if p.description}<p class="muted small desc">{p.description}</p>{/if}
-                  <p class="faint mono uuid">{p.uuid}</p>
-                </div>
-              </label>
-            {/each}
+                </label>
+              {/each}
+            </div>
           </div>
-          {#if supportedPacks.length === 0}
-            <p class="warn small">Este addon no contiene packs behavior/resource instalables.</p>
-          {/if}
-        </div>
+        {/each}
 
-        <!-- Install controls -->
         <div class="card">
           <div class="field">
             <span class="field-label">Mundo destino</span>
             <Select
               bind:value={selectedWorld}
-              options={worlds.map((w) => ({
-                value: w.name,
-                label: w.isActive ? `${w.name} (activo)` : w.name,
-              }))}
+              options={worldOptions}
               placeholder="Selecciona un mundo…"
               ariaLabel="Mundo destino"
             />
           </div>
           <p class="faint small note">
-            Se creará un backup automático del mundo antes de instalar.
+            Se creará un backup automático antes de instalar. Si el mundo aún no existe, se prepara
+            para que los packs se apliquen al generarlo en el primer arranque.
           </p>
           <button class="btn btn-primary install-btn" onclick={install} disabled={!canInstall}>
-            {installing ? 'Instalando…' : `Instalar ${selectedUuids.length} pack(s)`}
+            {installing
+              ? 'Instalando…'
+              : `Instalar ${totalSelected} pack(s) de ${staged.length} addon(s)`}
           </button>
         </div>
       {/if}
 
-      <!-- Result -->
       {#if report}
         <div class="card">
           <div class="card-title">Resultado</div>
@@ -253,7 +271,6 @@
       {/if}
     </section>
 
-    <!-- Installed list -->
     <section class="col">
       <div class="card">
         <div class="card-title">Addons instalados</div>
@@ -296,7 +313,7 @@
     cursor: pointer;
     border-style: dashed;
     color: var(--text);
-    transition: border-color 0.15s;
+    transition: border-color 0.15s, background 0.15s;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -344,11 +361,6 @@
     opacity: 0.6;
     cursor: default;
   }
-  .warnings {
-    margin-top: 12px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border);
-  }
   .pack-head {
     display: flex;
     align-items: center;
@@ -360,11 +372,6 @@
   }
   .desc {
     margin: 6px 0 0;
-  }
-  .uuid {
-    margin: 6px 0 0;
-    font-size: 11px;
-    word-break: break-all;
   }
   .ptype {
     font-size: 11px;
@@ -403,6 +410,11 @@
   }
   .warn {
     color: var(--warning);
+  }
+  .warnings {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
   }
   .result-row,
   .inst-row {

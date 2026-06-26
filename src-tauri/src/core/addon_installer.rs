@@ -161,11 +161,12 @@ pub fn install_packs(
 ) -> AppResult<Vec<InstalledPack>> {
     let server_root = Path::new(&server.path);
     let world_dir = Path::new(&server.worlds_path).join(world_name);
-    if !world_dir.is_dir() {
-        return Err(AppError::NotFound(format!(
-            "El mundo destino '{world_name}' no existe."
-        )));
-    }
+    // The world may not exist yet (brand-new server): pre-seed its folder so
+    // BDS picks up the pack json files when it generates the world on first
+    // start — important for addons that affect world generation.
+    std::fs::create_dir_all(&world_dir).map_err(|e| {
+        AppError::Io(format!("No se pudo preparar la carpeta del mundo '{world_name}': {e}"))
+    })?;
 
     let mut results = Vec::new();
 

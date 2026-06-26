@@ -44,6 +44,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            // Clean up any leftover files from a previous self-update.
+            core::updater::cleanup_leftovers();
+
             let data_dir = resolve_data_dir(app.handle());
             std::fs::create_dir_all(&data_dir).ok();
             let db_path = data_dir.join("bedrock_manager.db");
@@ -83,11 +86,14 @@ pub fn run() {
             commands::server_create_commands::create_server_from_official_download,
             commands::addon_commands::preview_addon,
             commands::addon_commands::install_addon,
+            commands::addon_commands::install_addons,
             commands::addon_commands::list_installed_addons,
             commands::addon_commands::uninstall_addon,
             commands::network_commands::get_network_status,
             commands::network_commands::add_firewall_rules,
             commands::network_commands::assign_free_port,
+            commands::update_commands::check_for_update,
+            commands::update_commands::download_and_install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

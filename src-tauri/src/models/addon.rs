@@ -2,6 +2,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::manifest::PackType;
 
+/// One addon to install in a batch run.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddonInstallItem {
+    pub source_path: String,
+    /// Restrict to these pack UUIDs; `None` installs all supported packs.
+    pub selected_uuids: Option<Vec<String>>,
+}
+
 /// A single pack detected inside an addon archive (for the preview UI).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
