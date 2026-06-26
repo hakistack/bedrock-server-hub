@@ -18,6 +18,7 @@
     { href: '/', label: 'Dashboard', icon: '🏠' },
     { href: '/console', label: 'Console', icon: '🖥️' },
     { href: '/settings', label: 'Settings', icon: '⚙️' },
+    { href: '/network', label: 'Red / Firewall', icon: '🛡️' },
     { href: '/worlds', label: 'Worlds', icon: '🌍' },
     { href: '/addons', label: 'Addons', icon: '🧩' },
     { href: '/backups', label: 'Backups', icon: '💾' },

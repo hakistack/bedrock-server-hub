@@ -4,7 +4,7 @@ use std::path::Path;
 
 use tauri::{AppHandle, Manager};
 
-use crate::commands::server_commands;
+use crate::commands::{network_commands, server_commands};
 use crate::core::{server_downloader, server_installer};
 use crate::db::repositories::servers_repository;
 use crate::error::{AppError, AppResult};
@@ -56,6 +56,13 @@ fn register_installed(
         ));
     }
     servers_repository::insert(&conn, &server)?;
+
+    // A freshly downloaded BDS defaults to port 19132 — give each new server a
+    // free, non-conflicting port pair. Best-effort: never fail creation over it.
+    let used = network_commands::collect_used_ports(&conn, &server.id);
+    let (v4, v6) = network_commands::free_port_pair(&used);
+    let _ = network_commands::write_ports(&server, v4, v6);
+
     drop(conn);
 
     // Best-effort cleanup of the downloaded zip.

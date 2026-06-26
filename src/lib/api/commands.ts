@@ -21,6 +21,7 @@ import type {
   ServerDownloadOption,
 } from '$lib/types/download';
 import type { AddonInstallReport, AddonPackage, InstalledAddon } from '$lib/types/addon';
+import type { NetworkStatus } from '$lib/types/network';
 
 /** Official Minecraft Bedrock Dedicated Server download page. */
 export const OFFICIAL_DOWNLOAD_PAGE =
@@ -171,6 +172,16 @@ export const api = {
 
   uninstallAddon: (serverId: string, worldName: string, uuid: string) =>
     invoke<boolean>('uninstall_addon', { serverId, worldName, uuid }),
+
+  // --- Network / firewall ---
+  getNetworkStatus: (serverId: string) =>
+    invoke<NetworkStatus>('get_network_status', { serverId }),
+
+  addFirewallRules: (serverId: string) =>
+    invoke<NetworkStatus>('add_firewall_rules', { serverId }),
+
+  assignFreePort: (serverId: string) =>
+    invoke<NetworkStatus>('assign_free_port', { serverId }),
 };
 
 /** Subscribe to backup zip progress events. */

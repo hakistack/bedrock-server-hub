@@ -2,6 +2,7 @@ pub mod addon_installer;
 pub mod addon_parser;
 pub mod archive;
 pub mod backup_service;
+pub mod firewall;
 pub mod manifest_reader;
 pub mod official_download_resolver;
 pub mod server_downloader;

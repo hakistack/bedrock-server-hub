@@ -85,6 +85,9 @@ pub fn run() {
             commands::addon_commands::install_addon,
             commands::addon_commands::list_installed_addons,
             commands::addon_commands::uninstall_addon,
+            commands::network_commands::get_network_status,
+            commands::network_commands::add_firewall_rules,
+            commands::network_commands::assign_free_port,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
