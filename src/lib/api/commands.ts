@@ -11,7 +11,7 @@ import type {
   StatusEvent,
   ValidationResult,
 } from '$lib/types/server';
-import { openUrl } from '@tauri-apps/plugin-opener';
+import { openUrl, openPath } from '@tauri-apps/plugin-opener';
 
 import type { PropertyEntry, PropertyUpdate } from '$lib/types/properties';
 import type { World } from '$lib/types/world';
@@ -45,6 +45,11 @@ export const MINECRAFT_PRIVACY = 'https://privacy.microsoft.com/en-us/privacysta
 /** Open a URL in the user's default browser. */
 export function openInBrowser(url: string): Promise<void> {
   return openUrl(url);
+}
+
+/** Reveal a folder/file in the OS file explorer. */
+export function openInFolder(path: string): Promise<void> {
+  return openPath(path);
 }
 
 /** Open a native folder picker. Returns the chosen path or null if cancelled. */

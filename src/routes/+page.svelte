@@ -3,38 +3,80 @@
   import { api } from '$lib/api/commands';
   import { serverStore } from '$lib/stores/server.store.svelte';
   import { logsStore } from '$lib/stores/logs.store.svelte';
+  import { metricsStore } from '$lib/stores/metrics.store.svelte';
   import { toasts } from '$lib/stores/toast.store.svelte';
   import { errorMessage } from '$lib/util/error';
+  import { humanSize, formatDate } from '$lib/util/format';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Card from '$lib/components/ui/Card.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
+  import StatChip from '$lib/components/ui/StatChip.svelte';
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
   import ServerControls from '$lib/components/server/ServerControls.svelte';
-  import LogView from '$lib/components/shared/LogView.svelte';
   import Sparkline from '$lib/components/shared/Sparkline.svelte';
-  import { metricsStore } from '$lib/stores/metrics.store.svelte';
-  import { humanSize } from '$lib/util/format';
+  import LogView from '$lib/components/shared/LogView.svelte';
 
   const server = $derived(serverStore.selected);
-  // Last lines of the active server for a quick glance.
-  const recentLogs = $derived(logsStore.get(serverStore.selectedId).slice(-12));
-
+  const status = $derived(serverStore.selectedStatus);
+  const recentLogs = $derived(logsStore.get(serverStore.selectedId).slice(-10));
   const metrics = $derived(metricsStore.get(serverStore.selectedId));
-  const cpuValues = $derived(metrics.map((m) => m.cpu));
-  const memValues = $derived(metrics.map((m) => m.memoryBytes));
   const latest = $derived(metrics.at(-1));
 
-  // Crash auto-restart preference, loaded per selected server.
+  const statusLabel: Record<string, string> = {
+    offline: 'Offline',
+    starting: 'Starting',
+    online: 'Online',
+    stopping: 'Stopping',
+    crashed: 'Crashed',
+  };
+
+  // Per-server overview data.
+  let activeWorld = $state('—');
+  let addonCount = $state(0);
+  let lastBackup = $state<string | null>(null);
   let autoRestart = $state(false);
-  let autoRestartLoadedFor = $state<string | null>(null);
+  let loadedFor = $state<string | null>(null);
+  let busy = $state(false);
 
   $effect(() => {
     const id = serverStore.selectedId;
-    if (id && id !== autoRestartLoadedFor) {
-      autoRestartLoadedFor = id;
-      api
-        .getServerSettings(id)
-        .then((s) => (autoRestart = s.autoRestart))
-        .catch(() => (autoRestart = false));
+    if (id && id !== loadedFor) {
+      loadedFor = id;
+      loadOverview(id);
     }
   });
+
+  async function loadOverview(id: string) {
+    try {
+      const props = await api.readProperties(id);
+      activeWorld = props.find((p) => p.key === 'level-name')?.value || 'Bedrock level';
+      const installed = await api.listInstalledAddons(id);
+      addonCount = installed.length;
+      const backups = await api.listBackups(id);
+      lastBackup = backups[0]?.createdAt ?? null;
+      const settings = await api.getServerSettings(id);
+      autoRestart = settings.autoRestart;
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  async function createBackup() {
+    const id = serverStore.selectedId;
+    if (!id || busy) return;
+    busy = true;
+    try {
+      await api.createBackup(id);
+      const backups = await api.listBackups(id);
+      lastBackup = backups[0]?.createdAt ?? null;
+      toasts.success('Backup creado.');
+    } catch (err) {
+      toasts.error(errorMessage(err));
+    } finally {
+      busy = false;
+    }
+  }
 
   async function toggleAutoRestart(e: Event) {
     const id = serverStore.selectedId;
@@ -50,128 +92,182 @@
   }
 </script>
 
-<header class="page-head">
-  <div>
-    <h1>Dashboard</h1>
-    <p class="muted">Estado y control de tu servidor Bedrock.</p>
-  </div>
-</header>
-
-{#if !server}
-  <div class="card empty-state">
-    <h2>No hay servidores todavía</h2>
-    <p class="muted">Crea uno nuevo: importa una carpeta existente o descarga el oficial.</p>
-    <div style="margin-top:16px; display:flex; justify-content:center;">
-      <a class="btn btn-primary" href="/new">+ Nuevo servidor</a>
+{#if serverStore.loaded && serverStore.servers.length === 0}
+  <!-- Onboarding -->
+  <div class="onboarding">
+    <div class="hero">
+      <img class="logo" src="/favicon.png" alt="" />
+      <h1>Bienvenido a Bedrock Server Manager</h1>
+      <p class="muted">
+        Crea o importa tu primer servidor dedicado de Minecraft Bedrock. Gestiona mundos, addons,
+        backups y más — sin tocar archivos a mano.
+      </p>
+    </div>
+    <div class="choices">
+      <a class="choice" href="/new">
+        <div class="ch-icon">⬇️</div>
+        <h2>Descargar servidor oficial</h2>
+        <p class="muted">Descarga y prepara un servidor nuevo desde la web oficial de Minecraft.</p>
+      </a>
+      <a class="choice" href="/new">
+        <div class="ch-icon">📂</div>
+        <h2>Importar servidor existente</h2>
+        <p class="muted">Usa una carpeta de Bedrock Dedicated Server que ya tienes.</p>
+      </a>
     </div>
   </div>
 {:else}
-  <div class="grid">
-    <section class="card">
-      <div class="row spread">
-        <div>
-          <div class="card-title">Servidor activo</div>
-          <h2>{server.name}</h2>
-          <p class="faint mono path">{server.path}</p>
-        </div>
-        <StatusBadge status={serverStore.selectedStatus} />
-      </div>
-      <div style="margin-top:18px;">
-        <ServerControls />
-      </div>
-      <label class="auto-restart">
-        <input type="checkbox" checked={autoRestart} onchange={toggleAutoRestart} />
-        <span>Reiniciar automáticamente tras un crash</span>
-      </label>
-    </section>
+  <PageHeader title="Dashboard" subtitle="Estado y control de tu servidor.">
+    {#snippet actions()}
+      {#if server}<StatusBadge {status} />{/if}
+    {/snippet}
+  </PageHeader>
 
-    <section class="card">
-      <div class="card-title">Accesos rápidos</div>
-      <div class="quick">
-        <button class="quick-btn" onclick={() => goto('/settings')}>
-          ⚙️ Editar server.properties
-        </button>
-        <button class="quick-btn" onclick={() => goto('/console')}>
-          🖥️ Abrir consola
-        </button>
-        <button class="quick-btn" onclick={() => goto('/worlds')}>
-          🌍 Mundos / importar .mcworld
-        </button>
-        <button class="quick-btn" onclick={() => goto('/backups')}>
-          💾 Backups
-        </button>
-        <button class="quick-btn" onclick={() => goto('/addons')}>
-          🧩 Instalar addon
-        </button>
-      </div>
-    </section>
-  </div>
-
-  <section class="card metrics-card">
-    <div class="card-title">Rendimiento del proceso</div>
-    {#if metrics.length === 0}
-      <p class="muted small">Sin datos. Inicia el servidor para ver CPU y memoria en vivo.</p>
-    {:else}
-      <div class="metrics-grid">
-        <div>
-          <div class="metric-head">
-            <span class="muted small">CPU</span>
-            <span class="metric-val">{latest ? latest.cpu.toFixed(0) : 0}%</span>
-          </div>
-          <Sparkline values={cpuValues} color="#6fb1ff" />
-        </div>
-        <div>
-          <div class="metric-head">
-            <span class="muted small">Memoria</span>
-            <span class="metric-val">{latest ? humanSize(latest.memoryBytes) : '—'}</span>
-          </div>
-          <Sparkline values={memValues} color="var(--accent)" />
-        </div>
-      </div>
-    {/if}
-  </section>
-
-  <section class="card logs-card">
-    <div class="row spread">
-      <div class="card-title" style="margin:0;">Últimos logs</div>
-      <a class="muted small" href="/console">Ver consola completa →</a>
+  {#if !server}
+    <Card>
+      <EmptyState
+        icon="🗄️"
+        title="Ningún servidor seleccionado"
+        description="Elige un servidor en la barra lateral, o crea/importa uno nuevo."
+      >
+        {#snippet actions()}
+          <Button variant="primary" href="/new">+ Nuevo servidor</Button>
+        {/snippet}
+      </EmptyState>
+    </Card>
+  {:else}
+    <div class="stats">
+      <StatChip
+        label="Estado"
+        value={statusLabel[status]}
+        icon="🟢"
+        tone={status === 'online' ? 'success' : status === 'crashed' ? 'danger' : 'default'}
+      />
+      <StatChip label="Mundo activo" value={activeWorld} icon="🌍" />
+      <StatChip label="Addons" value={String(addonCount)} icon="🧩" />
+      <StatChip
+        label="Último backup"
+        value={lastBackup ? formatDate(lastBackup) : 'Nunca'}
+        icon="💾"
+      />
     </div>
-    <div style="margin-top:12px;">
-      <LogView lines={recentLogs} height="260px" />
+
+    <div class="grid">
+      <Card title="Control del servidor">
+        <p class="faint mono path">{server.path}</p>
+        <div class="controls"><ServerControls /></div>
+        <label class="auto-restart">
+          <input type="checkbox" checked={autoRestart} onchange={toggleAutoRestart} />
+          <span>Reiniciar automáticamente tras un crash</span>
+        </label>
+      </Card>
+
+      <Card title="Acciones rápidas">
+        <div class="quick">
+          <Button onclick={() => goto('/addons')}>🧩 Instalar addon</Button>
+          <Button onclick={() => goto('/worlds')}>🌍 Importar mundo</Button>
+          <Button onclick={createBackup} loading={busy}>💾 Crear backup</Button>
+          <Button onclick={() => goto('/console')}>🖥️ Abrir consola</Button>
+        </div>
+      </Card>
     </div>
-  </section>
+
+    <Card title="Rendimiento del proceso">
+      {#if metrics.length === 0}
+        <p class="muted">Sin datos. Inicia el servidor para ver CPU y memoria en vivo.</p>
+      {:else}
+        <div class="metrics">
+          <div>
+            <div class="m-head">
+              <span class="muted">CPU</span><span class="m-val">{latest ? latest.cpu.toFixed(0) : 0}%</span>
+            </div>
+            <Sparkline values={metrics.map((m) => m.cpu)} color="#6fb1ff" />
+          </div>
+          <div>
+            <div class="m-head">
+              <span class="muted">Memoria</span>
+              <span class="m-val">{latest ? humanSize(latest.memoryBytes) : '—'}</span>
+            </div>
+            <Sparkline values={metrics.map((m) => m.memoryBytes)} color="var(--accent)" />
+          </div>
+        </div>
+      {/if}
+    </Card>
+
+    <Card>
+      {#snippet actions()}
+        <a class="link" href="/console">Ver consola completa →</a>
+      {/snippet}
+      {#snippet children()}
+        <div class="card-title" style="margin:0 0 12px;">Últimos logs</div>
+        <LogView lines={recentLogs} height="240px" />
+      {/snippet}
+    </Card>
+  {/if}
 {/if}
 
 <style>
-  .page-head {
-    margin-bottom: 22px;
+  .onboarding {
+    max-width: 760px;
+    margin: 4vh auto 0;
+    text-align: center;
+  }
+  .hero .logo {
+    width: 72px;
+    height: 72px;
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+  }
+  .hero h1 {
+    font-size: 28px;
+    margin: 18px 0 10px;
+  }
+  .hero .muted {
+    max-width: 540px;
+    margin: 0 auto;
+  }
+  .choices {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 32px;
+  }
+  .choice {
+    text-align: left;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px;
+    transition: border-color 0.15s, transform 0.1s;
+  }
+  .choice:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+  }
+  .ch-icon {
+    font-size: 30px;
+    margin-bottom: 10px;
+  }
+  .choice h2 {
+    font-size: 17px;
+    margin-bottom: 8px;
+  }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-bottom: 18px;
   }
   .grid {
     display: grid;
     grid-template-columns: 1.4fr 1fr;
     gap: 18px;
+    margin-bottom: 18px;
   }
   .path {
-    margin: 6px 0 0;
+    margin: 0 0 16px;
     font-size: 12px;
     word-break: break-all;
-  }
-  .quick {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .quick-btn {
-    text-align: left;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 11px 13px;
-    border-radius: var(--radius-sm);
-    transition: background 0.12s;
-  }
-  .quick-btn:hover {
-    background: #2b313d;
   }
   .auto-restart {
     display: flex;
@@ -186,39 +282,37 @@
     height: 16px;
     accent-color: var(--accent);
   }
-  .metrics-card {
-    margin-top: 18px;
+  .quick {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
   }
-  .metrics-grid {
+  .metrics {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 18px;
   }
-  .metric-head {
+  .m-head {
     display: flex;
-    align-items: baseline;
     justify-content: space-between;
+    align-items: baseline;
     margin-bottom: 7px;
   }
-  .metric-val {
+  .m-val {
     font-family: ui-monospace, monospace;
-    font-weight: 600;
+    font-weight: 650;
   }
-  .small {
+  .link {
+    color: var(--text-muted);
     font-size: 12px;
   }
-  .logs-card {
-    margin-top: 18px;
+  .link:hover {
+    color: var(--accent);
   }
-  @media (max-width: 700px) {
-    .metrics-grid {
-      grid-template-columns: 1fr;
+  @media (max-width: 1100px) {
+    .stats {
+      grid-template-columns: repeat(2, 1fr);
     }
-  }
-  .small {
-    font-size: 12px;
-  }
-  @media (max-width: 900px) {
     .grid {
       grid-template-columns: 1fr;
     }

@@ -13,6 +13,7 @@ fn map_row(row: &Row) -> rusqlite::Result<BackupRecord> {
         reason: row.get("reason")?,
         path: row.get("path")?,
         created_at: row.get("created_at")?,
+        size_bytes: None,
     })
 }
 
@@ -33,7 +34,9 @@ pub fn list_for_server(conn: &Connection, server_id: &str) -> AppResult<Vec<Back
     let rows = stmt.query_map([server_id], map_row)?;
     let mut out = Vec::new();
     for r in rows {
-        out.push(r?);
+        let mut rec = r?;
+        rec.size_bytes = Some(crate::core::archive::dir_size(std::path::Path::new(&rec.path)));
+        out.push(rec);
     }
     Ok(out)
 }

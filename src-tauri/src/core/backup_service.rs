@@ -84,6 +84,7 @@ pub fn create_backup(
         reason: reason.to_string(),
         path: folder.to_string_lossy().into_owned(),
         created_at,
+        size_bytes: None,
     };
 
     // 3. metadata.json (self-describing backup, independent of the DB).

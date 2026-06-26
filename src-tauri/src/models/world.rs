@@ -12,6 +12,8 @@ pub struct World {
     /// True when this is the server's active world (`level-name`).
     pub is_active: bool,
     pub size_bytes: u64,
+    /// Latest modification time of the world folder (RFC3339), if known.
+    pub modified_at: Option<String>,
     /// Whether the world already carries pack manifests (relevant for addons).
     pub has_behavior_packs: bool,
     pub has_resource_packs: bool,

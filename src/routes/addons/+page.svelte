@@ -1,12 +1,17 @@
 <script lang="ts">
-  import { confirm } from '@tauri-apps/plugin-dialog';
-  import { api, pickFiles } from '$lib/api/commands';
-  import { fileDrop } from '$lib/actions/fileDrop.svelte';
-  import Select from '$lib/components/shared/Select.svelte';
+  import { api } from '$lib/api/commands';
   import { serverStore } from '$lib/stores/server.store.svelte';
   import { toasts } from '$lib/stores/toast.store.svelte';
   import { errorMessage } from '$lib/util/error';
-  import type { World } from '$lib/types/world';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Card from '$lib/components/ui/Card.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import Badge from '$lib/components/ui/Badge.svelte';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
+  import Stepper from '$lib/components/ui/Stepper.svelte';
+  import FileDropzone from '$lib/components/ui/FileDropzone.svelte';
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
+  import Select from '$lib/components/shared/Select.svelte';
   import type { AddonInstallReport, AddonPack, WorldPack, WorldPacks } from '$lib/types/addon';
 
   interface StagedAddon {
@@ -16,94 +21,64 @@
     selected: Record<string, boolean>;
   }
 
+  const STEPS = ['Seleccionar', 'Mundo destino', 'Resultado'];
+  let step = $state(0);
+
   let staged = $state<StagedAddon[]>([]);
   let previewing = $state(false);
   let installing = $state(false);
-  let dragHover = $state(false);
 
-  let worlds = $state<World[]>([]);
+  let worlds = $state<{ name: string; isActive: boolean }[]>([]);
   let activeLevel = $state('');
   let selectedWorld = $state<string | null>(null);
   let worldPacks = $state<WorldPacks | null>(null);
   let report = $state<AddonInstallReport | null>(null);
   let loadedFor = $state<string | null>(null);
+  let removing = $state<WorldPack | null>(null);
+  let removingBusy = $state(false);
 
   const server = $derived(serverStore.selected);
 
-  function isSupported(p: AddonPack): boolean {
-    return p.packType === 'behavior' || p.packType === 'resource';
-  }
+  const isSupported = (p: AddonPack) => p.packType === 'behavior' || p.packType === 'resource';
+  const totalSelected = $derived(
+    staged.reduce((sum, s) => sum + s.packs.filter((p) => isSupported(p) && s.selected[p.uuid]).length, 0),
+  );
 
-  // World options: existing worlds + the active level-name (which may not exist
-  // yet on a brand-new server — addons can be pre-seeded before world gen).
   const worldOptions = $derived.by(() => {
-    const opts = worlds.map((w) => ({
-      value: w.name,
-      label: w.isActive ? `${w.name} (activo)` : w.name,
-    }));
+    const opts = worlds.map((w) => ({ value: w.name, label: w.isActive ? `${w.name} (activo)` : w.name }));
     if (activeLevel && !worlds.some((w) => w.name === activeLevel)) {
       opts.unshift({ value: activeLevel, label: `${activeLevel} (se generará al iniciar)` });
     }
     return opts;
   });
 
-  const totalSelected = $derived(
-    staged.reduce(
-      (sum, s) => sum + s.packs.filter((p) => isSupported(p) && s.selected[p.uuid]).length,
-      0,
-    ),
-  );
-  const canInstall = $derived(
-    !!server && !!selectedWorld && totalSelected > 0 && !installing && !previewing,
-  );
-
   $effect(() => {
     const id = serverStore.selectedId;
     if (id && id !== loadedFor) load(id);
   });
 
+  $effect(() => {
+    const id = serverStore.selectedId;
+    const w = selectedWorld;
+    if (id && w) api.listWorldPacks(id, w).then((wp) => (worldPacks = wp)).catch(() => (worldPacks = null));
+    else worldPacks = null;
+  });
+
   async function load(id: string) {
     loadedFor = id;
     try {
-      worlds = await api.listWorlds(id);
+      const w = await api.listWorlds(id);
+      worlds = w.map((x) => ({ name: x.name, isActive: x.isActive }));
       const props = await api.readProperties(id);
       activeLevel = props.find((p) => p.key === 'level-name')?.value ?? 'Bedrock level';
-      // Default target: the active world (existing or to-be-generated).
-      selectedWorld = worlds.find((w) => w.isActive)?.name ?? activeLevel;
+      selectedWorld = w.find((x) => x.isActive)?.name ?? activeLevel;
     } catch (err) {
       toasts.error(errorMessage(err));
     }
   }
-
-  // Reload the world's real packs whenever the selected world changes.
-  $effect(() => {
-    const id = serverStore.selectedId;
-    const world = selectedWorld;
-    if (id && world) {
-      api
-        .listWorldPacks(id, world)
-        .then((wp) => (worldPacks = wp))
-        .catch(() => (worldPacks = null));
-    } else {
-      worldPacks = null;
-    }
-  });
-
   async function reloadWorldPacks() {
     const id = serverStore.selectedId;
-    if (id && selectedWorld) {
-      try {
-        worldPacks = await api.listWorldPacks(id, selectedWorld);
-      } catch {
-        worldPacks = null;
-      }
-    }
-  }
-
-  async function addViaPicker() {
-    if (previewing || installing) return;
-    const paths = await pickFiles(['mcaddon', 'mcpack', 'zip'], 'Addons Bedrock');
-    await addPaths(paths);
+    if (id && selectedWorld) worldPacks = await api.listWorldPacks(id, selectedWorld).catch(() => null);
   }
 
   async function addPaths(paths: string[]) {
@@ -114,14 +89,9 @@
         if (staged.some((s) => s.sourcePath === path)) continue;
         try {
           const pkg = await api.previewAddon(path);
-          const selected: Record<string, boolean> = {};
-          for (const p of pkg.packs) if (isSupported(p)) selected[p.uuid] = true;
-          staged.push({
-            sourcePath: path,
-            displayName: pkg.displayName,
-            packs: pkg.packs,
-            selected,
-          });
+          const sel: Record<string, boolean> = {};
+          for (const p of pkg.packs) if (isSupported(p)) sel[p.uuid] = true;
+          staged.push({ sourcePath: path, displayName: pkg.displayName, packs: pkg.packs, selected: sel });
         } catch (err) {
           toasts.error(`${path.split(/[/\\]/).pop()}: ${errorMessage(err)}`);
         }
@@ -130,237 +100,203 @@
       previewing = false;
     }
   }
-
-  function removeStaged(sourcePath: string) {
-    staged = staged.filter((s) => s.sourcePath !== sourcePath);
+  function removeStaged(p: string) {
+    staged = staged.filter((s) => s.sourcePath !== p);
   }
 
   async function install() {
-    if (!canInstall || !server || !selectedWorld) return;
+    if (!server || !selectedWorld || totalSelected === 0 || installing) return;
     installing = true;
     report = null;
+    step = 2;
     try {
       const items = staged
         .map((s) => ({
           sourcePath: s.sourcePath,
-          selectedUuids: s.packs
-            .filter((p) => isSupported(p) && s.selected[p.uuid])
-            .map((p) => p.uuid),
+          selectedUuids: s.packs.filter((p) => isSupported(p) && s.selected[p.uuid]).map((p) => p.uuid),
         }))
         .filter((i) => i.selectedUuids.length > 0);
-
       report = await api.installAddons(server.id, selectedWorld, items);
       await reloadWorldPacks();
-      const ok = report.results.filter((r) => r.status === 'installed' || r.status === 'updated').length;
-      toasts.success(`${ok} pack(s) instalados en "${selectedWorld}".`);
       staged = [];
     } catch (err) {
       toasts.error(errorMessage(err));
+      step = 1;
     } finally {
       installing = false;
     }
   }
 
-  async function uninstall(pack: WorldPack) {
-    if (!server || !selectedWorld) return;
-    const ok = await confirm(
-      `¿Quitar "${pack.name}" del mundo "${selectedWorld}"?\nSe creará un backup automático antes.`,
-      { title: 'Quitar addon', kind: 'warning' },
-    );
-    if (!ok) return;
-    try {
-      await api.uninstallAddon(server.id, selectedWorld, pack.uuid);
-      await reloadWorldPacks();
-      toasts.success(`"${pack.name}" eliminado de "${selectedWorld}".`);
-    } catch (err) {
-      toasts.error(errorMessage(err));
-    }
+  function restart() {
+    step = 0;
+    report = null;
   }
 
-  /** Move a pack within its type's order (-1 up, +1 down) and persist. */
   async function move(packType: 'behavior' | 'resource', index: number, dir: -1 | 1) {
     if (!server || !selectedWorld || !worldPacks) return;
     const list = packType === 'behavior' ? [...worldPacks.behavior] : [...worldPacks.resource];
-    const target = index + dir;
-    if (target < 0 || target >= list.length) return;
-    [list[index], list[target]] = [list[target], list[index]];
+    const t = index + dir;
+    if (t < 0 || t >= list.length) return;
+    [list[index], list[t]] = [list[t], list[index]];
     try {
-      worldPacks = await api.reorderWorldPacks(
-        server.id,
-        selectedWorld,
-        packType,
-        list.map((p) => p.uuid),
-      );
+      worldPacks = await api.reorderWorldPacks(server.id, selectedWorld, packType, list.map((p) => p.uuid));
     } catch (err) {
       toasts.error(errorMessage(err));
     }
   }
+  async function confirmRemove() {
+    if (!server || !selectedWorld || !removing) return;
+    removingBusy = true;
+    try {
+      await api.uninstallAddon(server.id, selectedWorld, removing.uuid);
+      await reloadWorldPacks();
+      toasts.success(`"${removing.name}" eliminado.`);
+      removing = null;
+    } catch (err) {
+      toasts.error(errorMessage(err));
+    } finally {
+      removingBusy = false;
+    }
+  }
 
-  const packLabel: Record<string, string> = {
-    behavior: 'Behavior',
-    resource: 'Resource',
-    skin: 'Skin',
-    unknown: 'Desconocido',
-  };
+  const packLabel: Record<string, string> = { behavior: 'Behavior', resource: 'Resource', skin: 'Skin', unknown: 'Desconocido' };
 </script>
 
-<header class="page-head">
-  <h1>Addons</h1>
-  <p class="muted">
-    Instala uno o varios <span class="mono">.mcaddon</span> / <span class="mono">.mcpack</span> de una vez.
-  </p>
-</header>
+<PageHeader title="Addons" subtitle="Instala uno o varios .mcaddon / .mcpack en una corrida." />
 
 {#if !server}
-  <div class="card empty-state">Selecciona o importa un servidor para instalar addons.</div>
+  <div class="card"><EmptyState icon="🧩" title="Sin servidor" description="Selecciona un servidor para instalar addons." /></div>
 {:else}
   <div class="grid">
-    <section class="col">
-      <button
-        class="card dropzone"
-        class:busy={previewing}
-        class:drag-hover={dragHover}
-        onclick={addViaPicker}
-        use:fileDrop={{
-          extensions: ['mcaddon', 'mcpack', 'zip'],
-          onDrop: (p) => addPaths([p]),
-          onHover: (h) => (dragHover = h),
-        }}
-      >
-        <div class="dz-icon">🧩</div>
-        {#if previewing}
-          <p>Analizando…</p>
-        {:else if dragHover}
-          <p><strong>Suelta los archivos aquí</strong></p>
-        {:else}
-          <p><strong>Arrastra o selecciona addons</strong></p>
-          <p class="faint">Puedes añadir varios · .mcaddon · .mcpack · .zip</p>
-        {/if}
-      </button>
+    <div class="col">
+      <Card>
+        <div class="stepper-wrap"><Stepper steps={STEPS} current={step} /></div>
 
-      {#if staged.length}
-        {#each staged as s (s.sourcePath)}
-          <div class="card">
-            <div class="row spread">
-              <div class="card-title" style="margin:0;">{s.displayName}</div>
-              <button class="btn btn-sm" onclick={() => removeStaged(s.sourcePath)}>Quitar</button>
-            </div>
-            <div class="packs">
-              {#each s.packs as p (p.uuid)}
-                {@const supported = p.packType === 'behavior' || p.packType === 'resource'}
-                <label class="pack" class:unsupported={!supported}>
-                  <input
-                    type="checkbox"
-                    disabled={!supported}
-                    checked={supported && s.selected[p.uuid]}
-                    onchange={(e) => (s.selected[p.uuid] = (e.target as HTMLInputElement).checked)}
-                  />
-                  <div class="pack-body">
-                    <div class="pack-head">
-                      <span class="ptype {p.packType}">{packLabel[p.packType]}</span>
-                      <strong>{p.name}</strong>
-                      <span class="faint mono ver">v{p.version.join('.')}</span>
+        {#if step === 0}
+          <FileDropzone
+            extensions={['mcaddon', 'mcpack', 'zip']}
+            name="Addons Bedrock"
+            icon="🧩"
+            label="Arrastra o selecciona addons"
+            hint="Puedes añadir varios · .mcaddon · .mcpack · .zip"
+            busy={previewing}
+            onFile={(p) => addPaths([p])}
+          />
+          {#each staged as s (s.sourcePath)}
+            <div class="staged">
+              <div class="row spread">
+                <strong>{s.displayName}</strong>
+                <Button size="sm" onclick={() => removeStaged(s.sourcePath)}>Quitar</Button>
+              </div>
+              <div class="packs">
+                {#each s.packs as p (p.uuid)}
+                  {@const supported = isSupported(p)}
+                  <label class="pack" class:unsupported={!supported}>
+                    <input type="checkbox" disabled={!supported} checked={supported && s.selected[p.uuid]} onchange={(e) => (s.selected[p.uuid] = (e.target as HTMLInputElement).checked)} />
+                    <div class="pk-body">
+                      <div class="row" style="gap:8px;">
+                        <Badge tone={p.packType === 'resource' ? 'success' : p.packType === 'behavior' ? 'info' : 'default'}>{packLabel[p.packType]}</Badge>
+                        <strong>{p.name}</strong>
+                        <span class="faint mono small ver">v{p.version.join('.')}</span>
+                      </div>
+                      {#if p.description}<p class="muted small desc">{p.description}</p>{/if}
                     </div>
-                    {#if p.description}<p class="muted small desc">{p.description}</p>{/if}
-                  </div>
-                </label>
-              {/each}
-            </div>
-          </div>
-        {/each}
-
-        <div class="card">
-          <div class="field">
-            <span class="field-label">Mundo destino</span>
-            <Select
-              bind:value={selectedWorld}
-              options={worldOptions}
-              placeholder="Selecciona un mundo…"
-              ariaLabel="Mundo destino"
-            />
-          </div>
-          <p class="faint small note">
-            Se creará un backup automático antes de instalar. Si el mundo aún no existe, se prepara
-            para que los packs se apliquen al generarlo en el primer arranque.
-          </p>
-          <button class="btn btn-primary install-btn" onclick={install} disabled={!canInstall}>
-            {installing
-              ? 'Instalando…'
-              : `Instalar ${totalSelected} pack(s) de ${staged.length} addon(s)`}
-          </button>
-        </div>
-      {/if}
-
-      {#if report}
-        <div class="card">
-          <div class="card-title">Resultado</div>
-          {#each report.results as r (r.uuid)}
-            <div class="result-row">
-              <span class="status {r.status}">{r.status}</span>
-              <span>{r.name}</span>
-              {#if r.message}<span class="faint small">— {r.message}</span>{/if}
+                  </label>
+                {/each}
+              </div>
             </div>
           {/each}
-          {#if report.warnings.length}
-            <div class="warnings">
-              <strong class="warn small">⚠ Dependencias sin resolver</strong>
-              {#each report.warnings as w (w)}
-                <p class="muted small">{w}</p>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      {/if}
-    </section>
-
-    <section class="col">
-      {#snippet group(label: string, items: WorldPack[], packType: 'behavior' | 'resource')}
-        {#if items.length}
-          <div class="group">
-            <div class="group-title">{label} <span class="faint">({items.length})</span></div>
-            {#each items as p, i (p.uuid)}
-              <div class="wp-row">
-                <div class="order">
-                  <button class="ord" onclick={() => move(packType, i, -1)} disabled={i === 0} aria-label="Subir">▲</button>
-                  <button class="ord" onclick={() => move(packType, i, 1)} disabled={i === items.length - 1} aria-label="Bajar">▼</button>
-                </div>
-                <div class="wp-info">
-                  <strong>{p.name}</strong>
-                  {#if !p.present}<span class="orphan" title="Carpeta del pack no encontrada">huérfano</span>{/if}
-                  <div class="faint mono small">v{p.version.join('.')} · {p.uuid.slice(0, 8)}</div>
-                </div>
-                <button class="btn btn-sm btn-danger" onclick={() => uninstall(p)}>Quitar</button>
+          <div class="nav">
+            <Button variant="primary" disabled={totalSelected === 0} onclick={() => (step = 1)}>
+              Siguiente → ({totalSelected} pack{totalSelected === 1 ? '' : 's'})
+            </Button>
+          </div>
+        {:else if step === 1}
+          <div class="field">
+            <span class="lbl">Mundo destino</span>
+            <Select bind:value={selectedWorld} options={worldOptions} placeholder="Selecciona un mundo…" ariaLabel="Mundo destino" />
+            <p class="faint small">Se crea un backup automático antes de instalar. Si el mundo no existe aún, se prepara para aplicar los packs al generarlo.</p>
+          </div>
+          <div class="nav spread">
+            <Button onclick={() => (step = 0)}>← Atrás</Button>
+            <Button variant="primary" loading={installing} disabled={!selectedWorld} onclick={install}>Instalar {totalSelected} pack(s)</Button>
+          </div>
+        {:else}
+          {#if installing}
+            <div class="installing"><div class="spinner"></div><p>Instalando…</p></div>
+          {:else if report}
+            <div class="result-head">✅ Instalación completada en "{report.worldName}"</div>
+            {#each report.results as r (r.uuid)}
+              <div class="result-row">
+                <Badge tone={r.status === 'installed' ? 'success' : r.status === 'updated' ? 'info' : 'warning'}>{r.status}</Badge>
+                <span>{r.name}</span>
               </div>
             {/each}
-          </div>
+            {#if report.warnings.length}
+              <div class="warnings">
+                <strong class="warn small">⚠ Dependencias sin resolver</strong>
+                {#each report.warnings as w (w)}<p class="muted small">{w}</p>{/each}
+              </div>
+            {/if}
+            <div class="nav"><Button variant="primary" onclick={restart}>Instalar más</Button></div>
+          {/if}
         {/if}
-      {/snippet}
+      </Card>
+    </div>
 
-      <div class="card">
-        <div class="row spread">
-          <div class="card-title" style="margin:0;">Addons del mundo</div>
+    <div class="col">
+      <Card title="Addons del mundo">
+        {#snippet actions()}
           {#if selectedWorld}<span class="faint small mono">{selectedWorld}</span>{/if}
-        </div>
-        {#if !selectedWorld}
-          <p class="muted small">Selecciona un mundo.</p>
-        {:else if worldPacks && (worldPacks.behavior.length || worldPacks.resource.length)}
-          {@render group('Behavior packs', worldPacks.behavior, 'behavior')}
-          {@render group('Resource packs', worldPacks.resource, 'resource')}
-          <p class="faint small note2">
-            El orden define la prioridad: los de abajo se aplican por encima de los de arriba.
-          </p>
-        {:else}
-          <p class="muted small">Este mundo no tiene addons todavía.</p>
-        {/if}
-      </div>
-    </section>
+        {/snippet}
+        {#snippet children()}
+          {#snippet group(label: string, items: WorldPack[], packType: 'behavior' | 'resource')}
+            {#if items.length}
+              <div class="grp">
+                <div class="grp-title">{label} ({items.length})</div>
+                {#each items as p, i (p.uuid)}
+                  <div class="wp">
+                    <div class="ord">
+                      <button class="o" onclick={() => move(packType, i, -1)} disabled={i === 0} aria-label="Subir">▲</button>
+                      <button class="o" onclick={() => move(packType, i, 1)} disabled={i === items.length - 1} aria-label="Bajar">▼</button>
+                    </div>
+                    <div class="wp-info">
+                      <strong>{p.name}</strong>
+                      {#if !p.present}<Badge tone="warning">huérfano</Badge>{/if}
+                      <div class="faint mono small">v{p.version.join('.')} · {p.uuid.slice(0, 8)}</div>
+                    </div>
+                    <Button size="sm" variant="danger" onclick={() => (removing = p)}>Quitar</Button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          {/snippet}
+          {#if !selectedWorld}
+            <p class="muted small">Selecciona un mundo.</p>
+          {:else if worldPacks && (worldPacks.behavior.length || worldPacks.resource.length)}
+            {@render group('Behavior packs', worldPacks.behavior, 'behavior')}
+            {@render group('Resource packs', worldPacks.resource, 'resource')}
+            <p class="faint small note">El orden define la prioridad: los de abajo se aplican por encima.</p>
+          {:else}
+            <p class="muted small">Este mundo no tiene addons todavía.</p>
+          {/if}
+        {/snippet}
+      </Card>
+    </div>
   </div>
 {/if}
 
+<ConfirmDialog
+  open={removing !== null}
+  title="Quitar addon"
+  message={`¿Quitar "${removing?.name ?? ''}" del mundo "${selectedWorld ?? ''}"?\nSe creará un backup automático antes.`}
+  confirmLabel="Quitar"
+  danger
+  busy={removingBusy}
+  onconfirm={confirmRemove}
+/>
+
 <style>
-  .page-head {
-    margin-bottom: 22px;
-  }
   .grid {
     display: grid;
     grid-template-columns: 1.3fr 1fr;
@@ -372,44 +308,30 @@
     flex-direction: column;
     gap: 16px;
   }
-  .dropzone {
-    text-align: center;
-    cursor: pointer;
-    border-style: dashed;
-    color: var(--text);
-    transition: border-color 0.15s, background 0.15s;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    align-items: center;
-    padding: 28px;
-  }
-  .dropzone:hover,
-  .dropzone.drag-hover {
-    border-color: var(--accent);
-  }
-  .dropzone.drag-hover {
-    background: rgba(59, 165, 93, 0.08);
-  }
-  .dz-icon {
-    font-size: 30px;
+  .stepper-wrap {
+    margin-bottom: 20px;
   }
   .small {
     font-size: 12px;
   }
+  .staged {
+    margin-top: 14px;
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
+  }
   .packs {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    margin-top: 12px;
+    gap: 8px;
+    margin-top: 10px;
   }
   .pack {
     display: flex;
     align-items: flex-start;
-    gap: 11px;
+    gap: 10px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    padding: 11px;
+    padding: 10px;
     background: var(--surface-2);
     cursor: pointer;
   }
@@ -417,107 +339,103 @@
     margin-top: 3px;
     accent-color: var(--accent);
   }
-  .pack-body {
-    flex: 1;
-    min-width: 0;
-  }
   .pack.unsupported {
     opacity: 0.6;
     cursor: default;
   }
-  .pack-head {
-    display: flex;
-    align-items: center;
-    gap: 9px;
+  .pk-body {
+    flex: 1;
+    min-width: 0;
   }
   .ver {
     margin-left: auto;
-    font-size: 12px;
   }
   .desc {
-    margin: 6px 0 0;
-  }
-  .ptype {
-    font-size: 11px;
-    font-weight: 600;
-    padding: 1px 8px;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-  }
-  .ptype.behavior {
-    color: #6fb1ff;
-    border-color: #6fb1ff;
-  }
-  .ptype.resource {
-    color: var(--accent);
-    border-color: var(--accent);
-  }
-  .ptype.skin,
-  .ptype.unknown {
-    color: var(--text-muted);
+    margin: 5px 0 0;
   }
   .field {
     display: flex;
     flex-direction: column;
     gap: 7px;
   }
-  .field-label {
+  .lbl {
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 550;
   }
-  .note {
-    margin: 10px 0 12px;
+  .nav {
+    display: flex;
+    margin-top: 18px;
+    justify-content: flex-end;
   }
-  .install-btn {
-    width: 100%;
-    justify-content: center;
+  .nav.spread {
+    justify-content: space-between;
   }
-  .warn {
-    color: var(--warning);
+  .installing {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 40px;
+  }
+  .spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .result-head {
+    font-weight: 600;
+    margin-bottom: 12px;
+  }
+  .result-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
   }
   .warnings {
     margin-top: 12px;
     padding-top: 10px;
     border-top: 1px solid var(--border);
   }
-  .result-row {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border);
-    font-size: 13px;
+  .warn {
+    color: var(--warning);
   }
-  .result-row:last-child {
-    border-bottom: none;
+  .grp {
+    margin-bottom: 14px;
   }
-  .group {
-    margin-top: 12px;
-  }
-  .group-title {
+  .grp-title {
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-muted);
     margin-bottom: 6px;
   }
-  .wp-row {
+  .wp {
     display: flex;
     align-items: center;
     gap: 10px;
     padding: 8px 0;
     border-bottom: 1px solid var(--border);
-    font-size: 13px;
   }
-  .wp-row:last-child {
+  .wp:last-child {
     border-bottom: none;
   }
-  .order {
+  .ord {
     display: flex;
     flex-direction: column;
     gap: 2px;
   }
-  .ord {
+  .o {
     width: 22px;
     height: 16px;
     line-height: 1;
@@ -527,49 +445,20 @@
     color: var(--text-muted);
     border-radius: 4px;
   }
-  .ord:hover:not(:disabled) {
-    background: #2b313d;
-    color: var(--text);
-  }
-  .ord:disabled {
+  .o:disabled {
     opacity: 0.35;
   }
   .wp-info {
     flex: 1;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
   }
-  .orphan {
-    font-size: 10px;
-    color: var(--warning);
-    border: 1px solid var(--warning);
-    border-radius: 999px;
-    padding: 0 6px;
-    margin-left: 6px;
+  .note {
+    margin-top: 10px;
   }
-  .note2 {
-    margin: 12px 0 0;
-  }
-  .status {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    padding: 2px 8px;
-    border-radius: 6px;
-  }
-  .status.installed {
-    color: var(--accent);
-    background: rgba(59, 165, 93, 0.12);
-  }
-  .status.updated {
-    color: var(--info);
-    background: rgba(79, 143, 240, 0.12);
-  }
-  .status.unsupported,
-  .status.skipped {
-    color: var(--warning);
-    background: rgba(217, 164, 65, 0.12);
-  }
-  @media (max-width: 900px) {
+  @media (max-width: 1000px) {
     .grid {
       grid-template-columns: 1fr;
     }

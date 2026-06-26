@@ -5,6 +5,11 @@
   import { toasts } from '$lib/stores/toast.store.svelte';
   import { errorMessage } from '$lib/util/error';
   import { formatDate } from '$lib/util/format';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Card from '$lib/components/ui/Card.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import Badge from '$lib/components/ui/Badge.svelte';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
 
   let loadedFor = $state<string | null>(null);
 
@@ -12,16 +17,11 @@
   const online = $derived(playersStore.onlineOf(serverStore.selectedId));
   const events = $derived(playersStore.eventsOf(serverStore.selectedId));
 
-  // Seed the online list from the backend (covers players connected before
-  // this view, or events missed while elsewhere).
   $effect(() => {
     const id = serverStore.selectedId;
     if (id && id !== loadedFor) {
       loadedFor = id;
-      api
-        .getOnlinePlayers(id)
-        .then((p) => playersStore.setOnline(id, p))
-        .catch(() => {});
+      api.getOnlinePlayers(id).then((p) => playersStore.setOnline(id, p)).catch(() => {});
     }
   });
 
@@ -33,80 +33,57 @@
       toasts.error(errorMessage(err));
     }
   }
-
-  function relTime(iso: string): string {
-    return formatDate(iso);
-  }
 </script>
 
-<header class="page-head row spread">
-  <div>
-    <h1>Players</h1>
-    <p class="muted">Jugadores conectados y actividad (desde la consola del servidor).</p>
-  </div>
-  {#if server}<span class="count">{online.length} online</span>{/if}
-</header>
+<PageHeader title="Players" subtitle="Jugadores conectados y actividad (desde la consola del servidor).">
+  {#snippet actions()}
+    {#if server}<Badge tone={online.length ? 'success' : 'default'}>{online.length} online</Badge>{/if}
+  {/snippet}
+</PageHeader>
 
 {#if !server}
-  <div class="card empty-state">Selecciona o importa un servidor.</div>
+  <div class="card"><EmptyState icon="👥" title="Sin servidor" description="Selecciona un servidor." /></div>
 {:else}
   <div class="grid">
-    <section class="card">
-      <div class="card-title">Conectados ({online.length})</div>
+    <Card title={`Conectados (${online.length})`}>
       {#if online.length === 0}
         <p class="muted small">Nadie conectado ahora mismo.</p>
       {:else}
         {#each online as p (p.xuid)}
-          <div class="player-row">
+          <div class="player">
             <div class="avatar">{p.name.slice(0, 1).toUpperCase()}</div>
             <div class="p-info">
               <strong>{p.name}</strong>
-              <div class="faint mono small">XUID {p.xuid} · desde {relTime(p.connectedAt)}</div>
+              <div class="faint mono small">XUID {p.xuid} · desde {formatDate(p.connectedAt)}</div>
             </div>
-            <button class="btn btn-sm" onclick={() => copyXuid(p.xuid)}>Copiar XUID</button>
+            <Button size="sm" onclick={() => copyXuid(p.xuid)}>Copiar XUID</Button>
           </div>
         {/each}
       {/if}
-    </section>
+    </Card>
 
-    <section class="card">
-      <div class="card-title">Actividad reciente</div>
+    <Card title="Actividad reciente">
       {#if events.length === 0}
         <p class="muted small">Sin eventos todavía.</p>
       {:else}
         {#each events as e (e.at + e.xuid)}
-          <div class="event-row">
+          <div class="event">
             <span class="dot {e.event}"></span>
-            <span>
-              <strong>{e.name}</strong>
-              {e.event === 'connected' ? 'se conectó' : 'se desconectó'}
-            </span>
-            <span class="faint small when">{relTime(e.at)}</span>
+            <span><strong>{e.name}</strong> {e.event === 'connected' ? 'se conectó' : 'se desconectó'}</span>
+            <span class="faint small when">{formatDate(e.at)}</span>
           </div>
         {/each}
       {/if}
-    </section>
+    </Card>
   </div>
 
   <p class="faint small note">
-    Nota: salud, nivel, posición y armadura no los expone Bedrock por consola — requieren un pack de
-    telemetría (próximo milestone). Aquí se muestran online/XUID/conexiones a partir del log.
+    Salud, nivel, posición y armadura no los expone Bedrock por consola — requieren un pack de
+    telemetría (próximo milestone).
   </p>
 {/if}
 
 <style>
-  .page-head {
-    margin-bottom: 22px;
-    align-items: flex-start;
-  }
-  .count {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--accent);
-    border: 1px solid var(--accent);
-    border-radius: 999px;
-    padding: 4px 12px;
-  }
   .grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -116,22 +93,22 @@
   .small {
     font-size: 12px;
   }
-  .player-row {
+  .player {
     display: flex;
     align-items: center;
     gap: 11px;
     padding: 10px 0;
     border-bottom: 1px solid var(--border);
   }
-  .player-row:last-child {
+  .player:last-child {
     border-bottom: none;
   }
   .avatar {
     width: 34px;
     height: 34px;
     border-radius: 8px;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -142,7 +119,7 @@
     flex: 1;
     min-width: 0;
   }
-  .event-row {
+  .event {
     display: flex;
     align-items: center;
     gap: 9px;
@@ -150,10 +127,10 @@
     border-bottom: 1px solid var(--border);
     font-size: 13px;
   }
-  .event-row:last-child {
+  .event:last-child {
     border-bottom: none;
   }
-  .event-row .when {
+  .when {
     margin-left: auto;
   }
   .dot {

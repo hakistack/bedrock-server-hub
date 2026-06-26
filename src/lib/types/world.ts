@@ -4,6 +4,7 @@ export interface World {
   path: string;
   isActive: boolean;
   sizeBytes: number;
+  modifiedAt: string | null;
   hasBehaviorPacks: boolean;
   hasResourcePacks: boolean;
 }

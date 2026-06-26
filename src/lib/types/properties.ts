@@ -15,6 +15,7 @@ export interface PropertyFieldSpec {
   key: string;
   label: string;
   control: PropertyControl;
+  group: string;
   options?: string[];
   help?: string;
 }

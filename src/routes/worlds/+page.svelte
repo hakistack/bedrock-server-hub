@@ -1,10 +1,16 @@
 <script lang="ts">
-  import { api, pickFile } from '$lib/api/commands';
+  import { api, pickFile, openInFolder } from '$lib/api/commands';
   import { fileDrop } from '$lib/actions/fileDrop.svelte';
+  import { goto } from '$app/navigation';
   import { serverStore } from '$lib/stores/server.store.svelte';
   import { toasts } from '$lib/stores/toast.store.svelte';
   import { errorMessage } from '$lib/util/error';
-  import { humanSize } from '$lib/util/format';
+  import { humanSize, formatDate } from '$lib/util/format';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import Badge from '$lib/components/ui/Badge.svelte';
+  import EmptyState from '$lib/components/ui/EmptyState.svelte';
+  import Spinner from '$lib/components/ui/Spinner.svelte';
   import type { World } from '$lib/types/world';
 
   let worlds = $state<World[]>([]);
@@ -32,7 +38,6 @@
       loading = false;
     }
   }
-
   async function reload() {
     if (serverStore.selectedId) await load(serverStore.selectedId);
   }
@@ -41,7 +46,6 @@
     const path = await pickFile(['mcworld', 'zip'], 'Mundo Bedrock', 'Selecciona un .mcworld');
     if (path) await importFromPath(path);
   }
-
   async function importFromPath(path: string) {
     const id = serverStore.selectedId;
     if (!id || busy) return;
@@ -56,121 +60,102 @@
       busy = false;
     }
   }
-
-  async function activate(world: World) {
+  async function activate(w: World) {
     const id = serverStore.selectedId;
     if (!id || busy) return;
     busy = true;
     try {
-      await api.activateWorld(id, world.name);
+      await api.activateWorld(id, w.name);
       await reload();
-      toasts.success(`"${world.name}" es ahora el mundo activo.`);
+      toasts.success(`"${w.name}" es ahora el mundo activo.`);
     } catch (err) {
       toasts.error(errorMessage(err));
     } finally {
       busy = false;
     }
   }
-
-  async function backup(world: World) {
+  async function backup(w: World) {
     const id = serverStore.selectedId;
     if (!id || busy) return;
     busy = true;
     try {
-      await api.createBackup(id, world.name);
-      toasts.success(`Backup de "${world.name}" creado.`);
+      await api.createBackup(id, w.name);
+      toasts.success(`Backup de "${w.name}" creado.`);
     } catch (err) {
       toasts.error(errorMessage(err));
     } finally {
       busy = false;
     }
+  }
+  function packCount(w: World): number {
+    return (w.hasBehaviorPacks ? 1 : 0) + (w.hasResourcePacks ? 1 : 0);
   }
 </script>
 
-<header class="page-head row spread">
-  <div>
-    <h1>Worlds</h1>
-    <p class="muted">Mundos detectados en <span class="mono">worlds/</span>.</p>
-  </div>
-  {#if server}
-    <div class="import">
+<PageHeader title="Worlds" subtitle="Mundos detectados en la carpeta worlds/.">
+  {#snippet actions()}
+    {#if server}
       <label class="chk">
         <input type="checkbox" bind:checked={importActive} />
         Activar al importar
       </label>
-      <button class="btn btn-primary" onclick={doImport} disabled={busy}>
-        {busy ? 'Trabajando…' : '+ Importar .mcworld'}
-      </button>
-    </div>
-  {/if}
-</header>
+      <Button variant="primary" onclick={doImport} loading={busy}>+ Importar .mcworld</Button>
+    {/if}
+  {/snippet}
+</PageHeader>
 
 {#if !server}
-  <div class="card empty-state">Selecciona o importa un servidor para gestionar sus mundos.</div>
+  <div class="card"><EmptyState icon="🌍" title="Sin servidor" description="Selecciona un servidor para gestionar sus mundos." /></div>
 {:else}
   <div
     class="drop-wrap"
     class:drag-hover={dragHover}
-    use:fileDrop={{
-      extensions: ['mcworld', 'zip'],
-      onDrop: importFromPath,
-      onHover: (h) => (dragHover = h),
-    }}
+    use:fileDrop={{ extensions: ['mcworld', 'zip'], onDrop: importFromPath, onHover: (h) => (dragHover = h) }}
   >
     {#if dragHover}
       <div class="drop-banner">Suelta el <span class="mono">.mcworld</span> para importarlo</div>
     {/if}
     {#if loading}
-      <div class="card muted">Cargando mundos…</div>
+      <div class="card"><Spinner text="Cargando mundos…" /></div>
     {:else if worlds.length === 0}
-      <div class="card empty-state">
-        <h2>🌍 Sin mundos todavía</h2>
-        <p class="muted">
-          Importa un <span class="mono">.mcworld</span> (botón o arrastrándolo aquí) para empezar.
-        </p>
+      <div class="card">
+        <EmptyState icon="🌍" title="Sin mundos todavía" description="Importa un .mcworld (botón o arrastrándolo aquí) para empezar." />
       </div>
     {:else}
-      <div class="world-list">
-    {#each worlds as w (w.name)}
-      <div class="card world" class:active={w.isActive}>
-        <div class="world-main">
-          <div class="row" style="gap:10px;">
-            <h3>{w.displayName ?? w.name}</h3>
-            {#if w.isActive}<span class="active-tag">Activo</span>{/if}
+      <div class="grid">
+        {#each worlds as w (w.name)}
+          <div class="world" class:active={w.isActive}>
+            <div class="w-head">
+              <h3>{w.displayName ?? w.name}</h3>
+              {#if w.isActive}<Badge tone="success">Activo</Badge>{/if}
+            </div>
+            <div class="w-meta">
+              <span class="mono faint">{w.name}</span>
+              <span class="dot">·</span>
+              <span>{humanSize(w.sizeBytes)}</span>
+              {#if w.modifiedAt}<span class="dot">·</span><span class="faint">{formatDate(w.modifiedAt)}</span>{/if}
+            </div>
+            <div class="tags">
+              {#if w.hasBehaviorPacks}<Badge tone="info">behavior</Badge>{/if}
+              {#if w.hasResourcePacks}<Badge tone="success">resource</Badge>{/if}
+              {#if packCount(w) === 0}<span class="faint small">sin packs</span>{/if}
+            </div>
+            <div class="w-actions">
+              <Button size="sm" variant="primary" onclick={() => activate(w)} disabled={busy || w.isActive}>
+                {w.isActive ? 'Activo' : 'Activar'}
+              </Button>
+              <Button size="sm" onclick={() => backup(w)} disabled={busy}>💾 Backup</Button>
+              <Button size="sm" onclick={() => openInFolder(w.path)}>📂 Carpeta</Button>
+              <Button size="sm" onclick={() => goto('/addons')}>🧩 Packs</Button>
+            </div>
           </div>
-          <p class="faint mono small">{w.name} · {humanSize(w.sizeBytes)}</p>
-          <div class="tags">
-            {#if w.hasBehaviorPacks}<span class="tag">behavior packs</span>{/if}
-            {#if w.hasResourcePacks}<span class="tag">resource packs</span>{/if}
-          </div>
-        </div>
-        <div class="world-actions">
-          <button class="btn btn-sm" onclick={() => backup(w)} disabled={busy}>💾 Backup</button>
-          <button
-            class="btn btn-sm btn-primary"
-            onclick={() => activate(w)}
-            disabled={busy || w.isActive}
-          >
-            {w.isActive ? 'Activo' : 'Activar'}
-          </button>
-        </div>
-      </div>
-    {/each}
+        {/each}
       </div>
     {/if}
   </div>
 {/if}
 
 <style>
-  .page-head {
-    margin-bottom: 22px;
-    align-items: flex-start;
-  }
-  .import {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-  }
   .chk {
     display: flex;
     align-items: center;
@@ -183,65 +168,69 @@
   }
   .drop-wrap {
     border-radius: var(--radius);
-    transition: outline-color 0.15s;
     outline: 2px dashed transparent;
     outline-offset: 6px;
+    transition: outline-color 0.15s;
   }
   .drop-wrap.drag-hover {
     outline-color: var(--accent);
   }
   .drop-banner {
-    background: rgba(59, 165, 93, 0.12);
+    background: var(--accent-soft);
     border: 1px solid var(--accent);
     color: var(--accent);
     border-radius: var(--radius-sm);
     padding: 12px;
     text-align: center;
     margin-bottom: 12px;
-    font-weight: 500;
+    font-weight: 550;
   }
-  .world-list {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 14px;
   }
   .world {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 18px;
   }
   .world.active {
     border-color: var(--accent);
   }
-  .active-tag {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--accent);
-    border: 1px solid var(--accent);
-    border-radius: 999px;
-    padding: 1px 9px;
+  .w-head {
+    display: flex;
+    align-items: center;
+    gap: 9px;
   }
-  .small {
+  .w-head h3 {
+    font-size: 16px;
+  }
+  .w-meta {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 8px 0;
     font-size: 12px;
-    margin: 6px 0 0;
+    color: var(--text-muted);
+    flex-wrap: wrap;
+  }
+  .dot {
+    color: var(--text-faint);
   }
   .tags {
     display: flex;
     gap: 6px;
-    margin-top: 9px;
+    margin-bottom: 14px;
+    min-height: 20px;
   }
-  .tag {
-    font-size: 11px;
-    color: var(--text-muted);
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 2px 8px;
+  .small {
+    font-size: 12px;
   }
-  .world-actions {
+  .w-actions {
     display: flex;
     gap: 8px;
-    flex-shrink: 0;
+    flex-wrap: wrap;
   }
 </style>

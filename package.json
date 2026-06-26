@@ -1,6 +1,6 @@
 {
   "name": "bedrock-server-hub",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Desktop manager for Minecraft Bedrock Dedicated Servers",
   "type": "module",
   "scripts": {

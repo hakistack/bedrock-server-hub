@@ -12,6 +12,7 @@ export interface BackupRecord {
   reason: BackupReason | string;
   path: string;
   createdAt: string;
+  sizeBytes: number | null;
 }
 
 export interface BackupProgress {

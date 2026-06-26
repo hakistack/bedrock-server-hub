@@ -49,6 +49,9 @@ pub struct BackupRecord {
     pub reason: String,
     pub path: String,
     pub created_at: String,
+    /// On-disk size of the backup folder (filled when listing).
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
 }
 
 /// Progress event emitted on `backup://progress` while zipping a world.

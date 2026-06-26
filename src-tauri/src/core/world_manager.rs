@@ -57,10 +57,16 @@ pub fn list_worlds(worlds_path: &Path, active_level_name: &str) -> AppResult<Vec
         }
         let name = entry.file_name().to_string_lossy().into_owned();
 
+        let modified_at = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .ok()
+            .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
+
         worlds.push(World {
             display_name: read_levelname(&path),
             is_active: name == active_level_name,
             size_bytes: archive::dir_size(&path),
+            modified_at,
             has_behavior_packs: path.join("world_behavior_packs.json").is_file(),
             has_resource_packs: path.join("world_resource_packs.json").is_file(),
             path: path.to_string_lossy().into_owned(),
