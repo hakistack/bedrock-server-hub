@@ -15,14 +15,30 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+use sysinfo::{Pid, ProcessesToUpdate, System};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::error::{AppError, AppResult};
+use crate::models::player::{Player, PlayerEvent};
 use crate::models::server::Server;
 use crate::state::AppState;
 
 pub const EVENT_LOG: &str = "server://log";
 pub const EVENT_STATUS: &str = "server://status";
+pub const EVENT_METRICS: &str = "server://metrics";
+pub const EVENT_PLAYER: &str = "server://player";
+
+/// How often to sample process CPU/RAM.
+const METRICS_INTERVAL: Duration = Duration::from_secs(2);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerMetrics {
+    pub server_id: String,
+    /// CPU usage percent (can exceed 100% across cores).
+    pub cpu: f32,
+    pub memory_bytes: u64,
+}
 
 /// Grace period before a graceful stop escalates to a force kill.
 const STOP_GRACE: Duration = Duration::from_secs(8);
@@ -83,6 +99,68 @@ fn emit_log(app: &AppHandle, server_id: &str, stream: &str, line: String) {
     );
 }
 
+/// Update the online-players registry and emit a `server://player` event.
+fn handle_player(app: &AppHandle, server_id: &str, event: &str, name: &str, xuid: &str) {
+    let at = chrono::Local::now().to_rfc3339();
+    if let Some(state) = app.try_state::<AppState>() {
+        let mut map = state.players.lock().unwrap();
+        let list = map.entry(server_id.to_string()).or_default();
+        if event == "connected" {
+            if !list.iter().any(|p| p.xuid == xuid) {
+                list.push(Player {
+                    name: name.to_string(),
+                    xuid: xuid.to_string(),
+                    connected_at: at.clone(),
+                });
+            }
+        } else {
+            list.retain(|p| p.xuid != xuid);
+        }
+    }
+    let _ = app.emit(
+        EVENT_PLAYER,
+        PlayerEvent {
+            server_id: server_id.to_string(),
+            event: event.to_string(),
+            name: name.to_string(),
+            xuid: xuid.to_string(),
+            at,
+        },
+    );
+}
+
+/// Sample the server process CPU/RAM until it leaves the registry, emitting
+/// `server://metrics`. CPU usage needs two samples spaced apart.
+fn spawn_metrics(app: AppHandle, server_id: String, pid: u32) {
+    thread::spawn(move || {
+        let pid = Pid::from_u32(pid);
+        let mut sys = System::new();
+        loop {
+            // Stop once the server is no longer tracked.
+            match app.try_state::<AppState>() {
+                Some(state) if state.processes.lock().unwrap().contains_key(&server_id) => {}
+                _ => break,
+            }
+            sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+            thread::sleep(METRICS_INTERVAL);
+            sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+            match sys.process(pid) {
+                Some(p) => {
+                    let _ = app.emit(
+                        EVENT_METRICS,
+                        ServerMetrics {
+                            server_id: server_id.clone(),
+                            cpu: p.cpu_usage(),
+                            memory_bytes: p.memory(),
+                        },
+                    );
+                }
+                None => break,
+            }
+        }
+    });
+}
+
 /// Spawn a thread that streams a child's stdout/stderr to the frontend.
 ///
 /// The stdout reader (`primary == true`) additionally owns the lifecycle:
@@ -97,6 +175,10 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(
     status: Arc<Mutex<ServerStatus>>,
     primary: bool,
 ) {
+    // Compiled once per reader thread for player connect/disconnect parsing.
+    let connect_re = regex::Regex::new(r"Player connected:\s*(.+?),\s*xuid:\s*(\d+)").ok();
+    let disconnect_re = regex::Regex::new(r"Player disconnected:\s*(.+?),\s*xuid:\s*(\d+)").ok();
+
     thread::spawn(move || {
         let buf = BufReader::new(reader);
         for line in buf.lines() {
@@ -110,6 +192,19 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(
                     emit_status(&app, &server_id, ServerStatus::Online);
                     // Stable start → give a fresh crash budget.
                     reset_crash_counter(&app, &server_id);
+                }
+            }
+
+            if primary {
+                if let Some(re) = &connect_re {
+                    if let Some(c) = re.captures(&line) {
+                        handle_player(&app, &server_id, "connected", &c[1], &c[2]);
+                    }
+                }
+                if let Some(re) = &disconnect_re {
+                    if let Some(c) = re.captures(&line) {
+                        handle_player(&app, &server_id, "disconnected", &c[1], &c[2]);
+                    }
                 }
             }
 
@@ -130,6 +225,7 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(
             // Drop the registry entry if it is still the process we started.
             if let Some(state) = app.try_state::<AppState>() {
                 state.processes.lock().unwrap().remove(&server_id);
+                state.players.lock().unwrap().remove(&server_id);
             }
             emit_status(&app, &server_id, final_status);
 
@@ -270,6 +366,7 @@ pub fn start(app: &AppHandle, server: &Server) -> AppResult<()> {
         .spawn()
         .map_err(|e| AppError::Process(format!("No se pudo iniciar el servidor: {e}")))?;
 
+    let pid = child.id();
     let stdin = child.stdin.take();
     let stdout = child
         .stdout
@@ -308,6 +405,8 @@ pub fn start(app: &AppHandle, server: &Server) -> AppResult<()> {
             status,
         },
     );
+
+    spawn_metrics(app.clone(), server.id.clone(), pid);
 
     Ok(())
 }

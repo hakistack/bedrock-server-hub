@@ -53,6 +53,9 @@ pub fn run() {
 
             let conn = db::sqlite::open(&db_path).expect("no se pudo inicializar la base de datos");
             app.manage(AppState::new(conn, data_dir));
+
+            // Start the automated-backup scheduler.
+            core::backup_scheduler::start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -68,6 +71,7 @@ pub fn run() {
             commands::server_commands::get_server_status,
             commands::server_commands::get_server_settings,
             commands::server_commands::set_auto_restart,
+            commands::server_commands::get_online_players,
             commands::server_commands::send_server_command,
             commands::settings_commands::read_properties,
             commands::settings_commands::update_properties,
@@ -78,6 +82,8 @@ pub fn run() {
             commands::backup_commands::create_backup,
             commands::backup_commands::restore_backup,
             commands::backup_commands::delete_backup,
+            commands::backup_commands::get_backup_schedule,
+            commands::backup_commands::set_backup_schedule,
             commands::download_commands::get_official_server_download_options,
             commands::download_commands::resolve_manual_download_url,
             commands::download_commands::download_bedrock_server,
@@ -88,6 +94,8 @@ pub fn run() {
             commands::addon_commands::install_addon,
             commands::addon_commands::install_addons,
             commands::addon_commands::list_installed_addons,
+            commands::addon_commands::list_world_packs,
+            commands::addon_commands::reorder_world_packs,
             commands::addon_commands::uninstall_addon,
             commands::network_commands::get_network_status,
             commands::network_commands::add_firewall_rules,

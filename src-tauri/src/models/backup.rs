@@ -10,6 +10,33 @@ pub mod reason {
     pub const MANUAL: &str = "manual";
     pub const PRE_RESTORE: &str = "pre_restore";
     pub const ADDON_UNINSTALL: &str = "addon_uninstall";
+    pub const SCHEDULED: &str = "scheduled";
+}
+
+/// Per-server automated backup configuration (stored as JSON in app_settings).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupSchedule {
+    pub enabled: bool,
+    /// "interval" | "daily"
+    pub mode: String,
+    pub interval_minutes: u32,
+    /// "HH:MM" local time for daily mode.
+    pub daily_time: String,
+    /// Keep at most this many scheduled backups (0 = unlimited).
+    pub retention: u32,
+}
+
+impl Default for BackupSchedule {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: "interval".into(),
+            interval_minutes: 60,
+            daily_time: "04:00".into(),
+            retention: 7,
+        }
+    }
 }
 
 /// A backup taken before a modifying operation (or manually).

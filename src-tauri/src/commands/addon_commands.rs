@@ -10,7 +10,7 @@ use crate::core::{addon_installer, addon_parser};
 use crate::db::repositories::{addons_repository, servers_repository};
 use crate::error::{AppError, AppResult};
 use crate::models::addon::{
-    AddonInstallItem, AddonInstallReport, AddonPackage, InstalledAddon,
+    AddonInstallItem, AddonInstallReport, AddonPackage, InstalledAddon, WorldPacks,
 };
 use crate::models::backup::reason;
 use crate::models::server::Server;
@@ -189,6 +189,37 @@ pub fn list_installed_addons(
 ) -> AppResult<Vec<InstalledAddon>> {
     let conn = state.db.lock().unwrap();
     addons_repository::list_for_server(&conn, &server_id)
+}
+
+fn load_server(state: &AppState, server_id: &str) -> AppResult<Server> {
+    let conn = state.db.lock().unwrap();
+    servers_repository::get(&conn, server_id)?
+        .ok_or_else(|| AppError::NotFound("Servidor no encontrado.".into()))
+}
+
+/// List the packs a world actually references (real state, in order).
+#[tauri::command]
+pub fn list_world_packs(
+    state: State<AppState>,
+    server_id: String,
+    world_name: String,
+) -> AppResult<WorldPacks> {
+    let server = load_server(&state, &server_id)?;
+    Ok(addon_installer::list_world_packs(&server, &world_name))
+}
+
+/// Reorder a world's packs of a given type. Returns the refreshed lists.
+#[tauri::command]
+pub fn reorder_world_packs(
+    state: State<AppState>,
+    server_id: String,
+    world_name: String,
+    pack_type: String,
+    ordered_uuids: Vec<String>,
+) -> AppResult<WorldPacks> {
+    let server = load_server(&state, &server_id)?;
+    addon_installer::reorder_world_packs(&server, &world_name, &pack_type, &ordered_uuids)?;
+    Ok(addon_installer::list_world_packs(&server, &world_name))
 }
 
 /// Remove a pack from a world: backup, drop its json reference, delete its

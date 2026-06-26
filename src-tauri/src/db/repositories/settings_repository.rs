@@ -36,3 +36,8 @@ pub fn set_bool(conn: &Connection, key: &str, value: bool) -> AppResult<()> {
 pub fn auto_restart_key(server_id: &str) -> String {
     format!("server.{server_id}.autoRestart")
 }
+
+/// Settings key for a server's backup schedule (stored as JSON).
+pub fn backup_schedule_key(server_id: &str) -> String {
+    format!("server.{server_id}.backupSchedule")
+}

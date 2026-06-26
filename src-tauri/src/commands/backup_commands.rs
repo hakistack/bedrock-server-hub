@@ -4,9 +4,9 @@ use rusqlite::Connection;
 use tauri::{AppHandle, State};
 
 use crate::core::backup_service;
-use crate::db::repositories::{backups_repository, servers_repository};
+use crate::db::repositories::{backups_repository, servers_repository, settings_repository};
 use crate::error::{AppError, AppResult};
-use crate::models::backup::{reason, BackupRecord, RestoreOptions};
+use crate::models::backup::{reason, BackupRecord, BackupSchedule, RestoreOptions};
 use crate::models::server::Server;
 use crate::state::AppState;
 
@@ -66,6 +66,29 @@ pub fn restore_backup(
     make_backup(&app, &conn, &server, record.world_name.as_deref(), reason::PRE_RESTORE)?;
     backup_service::restore_backup(&server, &record, opts)?;
     Ok(record)
+}
+
+#[tauri::command]
+pub fn get_backup_schedule(
+    state: State<AppState>,
+    server_id: String,
+) -> AppResult<BackupSchedule> {
+    let conn = state.db.lock().unwrap();
+    let raw = settings_repository::get(&conn, &settings_repository::backup_schedule_key(&server_id))?;
+    Ok(raw
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+pub fn set_backup_schedule(
+    state: State<AppState>,
+    server_id: String,
+    schedule: BackupSchedule,
+) -> AppResult<()> {
+    let json = serde_json::to_string(&schedule)?;
+    let conn = state.db.lock().unwrap();
+    settings_repository::set(&conn, &settings_repository::backup_schedule_key(&server_id), &json)
 }
 
 #[tauri::command]

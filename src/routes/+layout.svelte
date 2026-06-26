@@ -4,9 +4,11 @@
   import { afterNavigate } from '$app/navigation';
 
   import '$lib/styles/app.css';
-  import { onServerLog, onServerStatus } from '$lib/api/commands';
+  import { onServerLog, onServerStatus, onServerMetrics, onPlayerEvent } from '$lib/api/commands';
   import { serverStore } from '$lib/stores/server.store.svelte';
   import { logsStore } from '$lib/stores/logs.store.svelte';
+  import { metricsStore } from '$lib/stores/metrics.store.svelte';
+  import { playersStore } from '$lib/stores/players.store.svelte';
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
   import Select from '$lib/components/shared/Select.svelte';
   import Toasts from '$lib/components/shared/Toasts.svelte';
@@ -18,6 +20,7 @@
   const nav: NavItem[] = [
     { href: '/', label: 'Dashboard', icon: '🏠' },
     { href: '/console', label: 'Console', icon: '🖥️' },
+    { href: '/players', label: 'Players', icon: '👥' },
     { href: '/settings', label: 'Settings', icon: '⚙️' },
     { href: '/network', label: 'Red / Firewall', icon: '🛡️' },
     { href: '/worlds', label: 'Worlds', icon: '🌍' },
@@ -33,6 +36,8 @@
       unlisteners.push(un),
     );
     onServerLog((log) => logsStore.append(log)).then((un) => unlisteners.push(un));
+    onServerMetrics((m) => metricsStore.append(m)).then((un) => unlisteners.push(un));
+    onPlayerEvent((e) => playersStore.applyEvent(e)).then((un) => unlisteners.push(un));
 
     return () => unlisteners.forEach((un) => un());
   });

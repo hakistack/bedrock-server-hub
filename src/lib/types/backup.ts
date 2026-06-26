@@ -26,3 +26,12 @@ export interface RestoreOptions {
   restoreWorld: boolean;
   restoreProperties: boolean;
 }
+
+export interface BackupSchedule {
+  enabled: boolean;
+  /** "interval" | "daily" */
+  mode: string;
+  intervalMinutes: number;
+  dailyTime: string;
+  retention: number;
+}

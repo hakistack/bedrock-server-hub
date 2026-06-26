@@ -1,6 +1,7 @@
 pub mod addon_installer;
 pub mod addon_parser;
 pub mod archive;
+pub mod backup_scheduler;
 pub mod backup_service;
 pub mod firewall;
 pub mod manifest_reader;

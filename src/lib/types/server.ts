@@ -49,3 +49,9 @@ export interface AppError {
 export interface ServerSettings {
   autoRestart: boolean;
 }
+
+export interface ServerMetrics {
+  serverId: string;
+  cpu: number;
+  memoryBytes: number;
+}

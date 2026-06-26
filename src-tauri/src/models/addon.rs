@@ -57,6 +57,29 @@ pub struct AddonInstallReport {
     pub warnings: Vec<String>,
 }
 
+/// A pack actually referenced by a world (read from world_*_packs.json),
+/// in application order.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorldPack {
+    pub uuid: String,
+    pub version: Vec<i64>,
+    /// Resolved from the pack's manifest when its folder is found; else the uuid.
+    pub name: String,
+    /// "behavior" | "resource"
+    pub pack_type: String,
+    /// Whether the referenced pack folder exists on disk.
+    pub present: bool,
+}
+
+/// The ordered packs of a single world, split by type.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorldPacks {
+    pub behavior: Vec<WorldPack>,
+    pub resource: Vec<WorldPack>,
+}
+
 /// A record of an installed addon pack (from the database).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

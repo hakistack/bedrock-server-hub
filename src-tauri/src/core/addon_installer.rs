@@ -5,7 +5,7 @@
 //! `world_behavior_packs.json` / `world_resource_packs.json`, deduplicated by
 //! pack UUID so re-installing never produces duplicate entries.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,7 @@ use walkdir::WalkDir;
 use crate::core::addon_parser::PreparedAddon;
 use crate::core::{archive, manifest_reader};
 use crate::error::{AppError, AppResult};
-use crate::models::addon::InstalledPack;
+use crate::models::addon::{InstalledPack, WorldPack, WorldPacks};
 use crate::models::manifest::PackType;
 use crate::models::server::Server;
 
@@ -149,6 +149,84 @@ pub fn uninstall_pack(server: &Server, world_name: &str, uuid: &str) -> AppResul
     let removed_r = remove_pack_ref(&world_dir.join(RESOURCE_JSON), uuid)?;
     let removed_folder = delete_pack_folder(server, uuid);
     Ok(removed_b || removed_r || removed_folder)
+}
+
+/// Map of pack uuid → display name for every pack folder under `dir`.
+fn pack_names_in(dir: &Path) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return map;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        // manifest.json may sit one level in.
+        for e in WalkDir::new(&path).max_depth(2).into_iter().filter_map(|e| e.ok()) {
+            if e.file_name().to_string_lossy().eq_ignore_ascii_case("manifest.json") {
+                if let Ok(m) = manifest_reader::read(e.path()) {
+                    map.insert(m.uuid, m.name);
+                }
+                break;
+            }
+        }
+    }
+    map
+}
+
+fn world_packs_of(world_dir: &Path, json: &str, names: &HashMap<String, String>, kind: &str) -> Vec<WorldPack> {
+    read_pack_refs(&world_dir.join(json))
+        .into_iter()
+        .map(|r| WorldPack {
+            name: names.get(&r.pack_id).cloned().unwrap_or_else(|| r.pack_id.clone()),
+            present: names.contains_key(&r.pack_id),
+            uuid: r.pack_id,
+            version: r.version,
+            pack_type: kind.to_string(),
+        })
+        .collect()
+}
+
+/// List the packs a world actually references, in application order, resolving
+/// names from the installed pack folders.
+pub fn list_world_packs(server: &Server, world_name: &str) -> WorldPacks {
+    let server_root = Path::new(&server.path);
+    let world_dir = Path::new(&server.worlds_path).join(world_name);
+    let bnames = pack_names_in(&server_root.join("behavior_packs"));
+    let rnames = pack_names_in(&server_root.join("resource_packs"));
+    WorldPacks {
+        behavior: world_packs_of(&world_dir, BEHAVIOR_JSON, &bnames, "behavior"),
+        resource: world_packs_of(&world_dir, RESOURCE_JSON, &rnames, "resource"),
+    }
+}
+
+/// Rewrite a world's pack json in the given uuid order (versions/extra kept).
+/// Unknown uuids are appended at the end preserving their relative order.
+pub fn reorder_world_packs(
+    server: &Server,
+    world_name: &str,
+    pack_type: &str,
+    ordered_uuids: &[String],
+) -> AppResult<()> {
+    let json_name = match pack_type {
+        "behavior" => BEHAVIOR_JSON,
+        "resource" => RESOURCE_JSON,
+        _ => return Err(AppError::Validation("Tipo de pack inválido.".into())),
+    };
+    let path = Path::new(&server.worlds_path).join(world_name).join(json_name);
+    if !path.is_file() {
+        return Ok(());
+    }
+    let mut refs = read_pack_refs(&path);
+    refs.sort_by_key(|r| {
+        ordered_uuids
+            .iter()
+            .position(|u| u == &r.pack_id)
+            .unwrap_or(usize::MAX)
+    });
+    write_pack_refs(&path, &refs)?;
+    Ok(())
 }
 
 /// Install supported packs from `prepared` into `server` / `world_name`.

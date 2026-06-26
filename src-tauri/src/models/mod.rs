@@ -3,6 +3,7 @@ pub mod backup;
 pub mod download;
 pub mod manifest;
 pub mod network;
+pub mod player;
 pub mod properties;
 pub mod server;
 pub mod update;

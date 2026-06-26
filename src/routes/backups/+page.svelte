@@ -6,12 +6,21 @@
   import { toasts } from '$lib/stores/toast.store.svelte';
   import { errorMessage } from '$lib/util/error';
   import { formatDate, backupReasonLabel } from '$lib/util/format';
-  import type { BackupProgress, BackupRecord } from '$lib/types/backup';
+  import Select from '$lib/components/shared/Select.svelte';
+  import NumberField from '$lib/components/shared/NumberField.svelte';
+  import Toggle from '$lib/components/shared/Toggle.svelte';
+  import type { BackupProgress, BackupRecord, BackupSchedule } from '$lib/types/backup';
 
   let backups = $state<BackupRecord[]>([]);
   let loading = $state(false);
   let busy = $state(false);
   let loadedFor = $state<string | null>(null);
+
+  // Automated backup schedule.
+  let schedule = $state<BackupSchedule | null>(null);
+  let intervalStr = $state('60');
+  let retentionStr = $state('7');
+  let savingSchedule = $state(false);
 
   // Restore options panel.
   let restoring = $state<BackupRecord | null>(null);
@@ -45,11 +54,30 @@
     loading = true;
     try {
       backups = await api.listBackups(id);
+      schedule = await api.getBackupSchedule(id);
+      intervalStr = String(schedule.intervalMinutes);
+      retentionStr = String(schedule.retention);
       loadedFor = id;
     } catch (err) {
       toasts.error(errorMessage(err));
     } finally {
       loading = false;
+    }
+  }
+
+  async function saveSchedule() {
+    const id = serverStore.selectedId;
+    if (!id || !schedule || savingSchedule) return;
+    schedule.intervalMinutes = Math.max(5, parseInt(intervalStr, 10) || 60);
+    schedule.retention = Math.max(0, parseInt(retentionStr, 10) || 0);
+    savingSchedule = true;
+    try {
+      await api.setBackupSchedule(id, schedule);
+      toasts.success('Programación de backups guardada.');
+    } catch (err) {
+      toasts.error(errorMessage(err));
+    } finally {
+      savingSchedule = false;
     }
   }
 
@@ -146,6 +174,58 @@
   </div>
 {/if}
 
+{#if server && schedule}
+  <div class="card schedule-card">
+    <div class="row spread">
+      <div class="card-title" style="margin:0;">Backups automáticos</div>
+      <Toggle
+        checked={schedule.enabled}
+        onToggle={(v) => (schedule!.enabled = v)}
+        onLabel="Activado"
+        offLabel="Desactivado"
+      />
+    </div>
+    {#if schedule.enabled}
+      <div class="sched-grid">
+        <div class="field">
+          <span class="field-label">Modo</span>
+          <Select
+            bind:value={schedule.mode}
+            options={[
+              { value: 'interval', label: 'Por intervalo' },
+              { value: 'daily', label: 'Diario (hora fija)' },
+            ]}
+            ariaLabel="Modo de backup"
+          />
+        </div>
+        {#if schedule.mode === 'daily'}
+          <div class="field">
+            <span class="field-label">Hora (HH:MM)</span>
+            <input class="input mono" type="time" bind:value={schedule.dailyTime} />
+          </div>
+        {:else}
+          <div class="field">
+            <span class="field-label">Cada (minutos)</span>
+            <NumberField bind:value={intervalStr} min={5} step={5} ariaLabel="Intervalo en minutos" />
+          </div>
+        {/if}
+        <div class="field">
+          <span class="field-label">Retención (máx. backups)</span>
+          <NumberField bind:value={retentionStr} min={0} ariaLabel="Retención" />
+        </div>
+      </div>
+      <p class="faint small note">
+        Hace backup del mundo activo y conserva los últimos N. Requiere la app abierta para disparar.
+      </p>
+    {/if}
+    <div class="row" style="justify-content:flex-end; margin-top:6px;">
+      <button class="btn btn-primary" onclick={saveSchedule} disabled={savingSchedule}>
+        {savingSchedule ? 'Guardando…' : 'Guardar programación'}
+      </button>
+    </div>
+  </div>
+{/if}
+
 {#if !server}
   <div class="card empty-state">Selecciona o importa un servidor para ver sus backups.</div>
 {:else if loading}
@@ -229,6 +309,32 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+  .schedule-card {
+    margin-bottom: 16px;
+  }
+  .sched-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    margin: 14px 0 4px;
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .field-label {
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .note {
+    margin: 4px 0 0;
+  }
+  @media (max-width: 760px) {
+    .sched-grid {
+      grid-template-columns: 1fr;
+    }
   }
   .bar {
     height: 10px;

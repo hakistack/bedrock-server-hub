@@ -32,6 +32,19 @@ export interface AddonInstallReport {
   warnings: string[];
 }
 
+export interface WorldPack {
+  uuid: string;
+  version: number[];
+  name: string;
+  packType: 'behavior' | 'resource';
+  present: boolean;
+}
+
+export interface WorldPacks {
+  behavior: WorldPack[];
+  resource: WorldPack[];
+}
+
 export interface InstalledAddon {
   id: string;
   serverId: string;

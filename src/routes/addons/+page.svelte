@@ -6,9 +6,8 @@
   import { serverStore } from '$lib/stores/server.store.svelte';
   import { toasts } from '$lib/stores/toast.store.svelte';
   import { errorMessage } from '$lib/util/error';
-  import { formatDate } from '$lib/util/format';
   import type { World } from '$lib/types/world';
-  import type { AddonInstallReport, AddonPack, InstalledAddon } from '$lib/types/addon';
+  import type { AddonInstallReport, AddonPack, WorldPack, WorldPacks } from '$lib/types/addon';
 
   interface StagedAddon {
     sourcePath: string;
@@ -25,7 +24,7 @@
   let worlds = $state<World[]>([]);
   let activeLevel = $state('');
   let selectedWorld = $state<string | null>(null);
-  let installed = $state<InstalledAddon[]>([]);
+  let worldPacks = $state<WorldPacks | null>(null);
   let report = $state<AddonInstallReport | null>(null);
   let loadedFor = $state<string | null>(null);
 
@@ -69,11 +68,35 @@
       worlds = await api.listWorlds(id);
       const props = await api.readProperties(id);
       activeLevel = props.find((p) => p.key === 'level-name')?.value ?? 'Bedrock level';
-      installed = await api.listInstalledAddons(id);
       // Default target: the active world (existing or to-be-generated).
       selectedWorld = worlds.find((w) => w.isActive)?.name ?? activeLevel;
     } catch (err) {
       toasts.error(errorMessage(err));
+    }
+  }
+
+  // Reload the world's real packs whenever the selected world changes.
+  $effect(() => {
+    const id = serverStore.selectedId;
+    const world = selectedWorld;
+    if (id && world) {
+      api
+        .listWorldPacks(id, world)
+        .then((wp) => (worldPacks = wp))
+        .catch(() => (worldPacks = null));
+    } else {
+      worldPacks = null;
+    }
+  });
+
+  async function reloadWorldPacks() {
+    const id = serverStore.selectedId;
+    if (id && selectedWorld) {
+      try {
+        worldPacks = await api.listWorldPacks(id, selectedWorld);
+      } catch {
+        worldPacks = null;
+      }
     }
   }
 
@@ -127,7 +150,7 @@
         .filter((i) => i.selectedUuids.length > 0);
 
       report = await api.installAddons(server.id, selectedWorld, items);
-      installed = await api.listInstalledAddons(server.id);
+      await reloadWorldPacks();
       const ok = report.results.filter((r) => r.status === 'installed' || r.status === 'updated').length;
       toasts.success(`${ok} pack(s) instalados en "${selectedWorld}".`);
       staged = [];
@@ -138,17 +161,36 @@
     }
   }
 
-  async function uninstall(a: InstalledAddon) {
-    if (!server) return;
+  async function uninstall(pack: WorldPack) {
+    if (!server || !selectedWorld) return;
     const ok = await confirm(
-      `¿Quitar "${a.name}" del mundo "${a.worldName}"?\nSe creará un backup automático antes.`,
+      `¿Quitar "${pack.name}" del mundo "${selectedWorld}"?\nSe creará un backup automático antes.`,
       { title: 'Quitar addon', kind: 'warning' },
     );
     if (!ok) return;
     try {
-      await api.uninstallAddon(server.id, a.worldName, a.uuid);
-      installed = await api.listInstalledAddons(server.id);
-      toasts.success(`"${a.name}" eliminado de "${a.worldName}".`);
+      await api.uninstallAddon(server.id, selectedWorld, pack.uuid);
+      await reloadWorldPacks();
+      toasts.success(`"${pack.name}" eliminado de "${selectedWorld}".`);
+    } catch (err) {
+      toasts.error(errorMessage(err));
+    }
+  }
+
+  /** Move a pack within its type's order (-1 up, +1 down) and persist. */
+  async function move(packType: 'behavior' | 'resource', index: number, dir: -1 | 1) {
+    if (!server || !selectedWorld || !worldPacks) return;
+    const list = packType === 'behavior' ? [...worldPacks.behavior] : [...worldPacks.resource];
+    const target = index + dir;
+    if (target < 0 || target >= list.length) return;
+    [list[index], list[target]] = [list[target], list[index]];
+    try {
+      worldPacks = await api.reorderWorldPacks(
+        server.id,
+        selectedWorld,
+        packType,
+        list.map((p) => p.uuid),
+      );
     } catch (err) {
       toasts.error(errorMessage(err));
     }
@@ -272,21 +314,43 @@
     </section>
 
     <section class="col">
-      <div class="card">
-        <div class="card-title">Addons instalados</div>
-        {#if installed.length === 0}
-          <p class="muted small">Ninguno todavía.</p>
-        {:else}
-          {#each installed as a (a.id)}
-            <div class="inst-row">
-              <div>
-                <strong>{a.name}</strong>
-                <span class="ptype {a.packType}">{packLabel[a.packType] ?? a.packType}</span>
-                <div class="faint mono small">v{a.version} · {a.worldName}</div>
+      {#snippet group(label: string, items: WorldPack[], packType: 'behavior' | 'resource')}
+        {#if items.length}
+          <div class="group">
+            <div class="group-title">{label} <span class="faint">({items.length})</span></div>
+            {#each items as p, i (p.uuid)}
+              <div class="wp-row">
+                <div class="order">
+                  <button class="ord" onclick={() => move(packType, i, -1)} disabled={i === 0} aria-label="Subir">▲</button>
+                  <button class="ord" onclick={() => move(packType, i, 1)} disabled={i === items.length - 1} aria-label="Bajar">▼</button>
+                </div>
+                <div class="wp-info">
+                  <strong>{p.name}</strong>
+                  {#if !p.present}<span class="orphan" title="Carpeta del pack no encontrada">huérfano</span>{/if}
+                  <div class="faint mono small">v{p.version.join('.')} · {p.uuid.slice(0, 8)}</div>
+                </div>
+                <button class="btn btn-sm btn-danger" onclick={() => uninstall(p)}>Quitar</button>
               </div>
-              <button class="btn btn-sm btn-danger" onclick={() => uninstall(a)}>Quitar</button>
-            </div>
-          {/each}
+            {/each}
+          </div>
+        {/if}
+      {/snippet}
+
+      <div class="card">
+        <div class="row spread">
+          <div class="card-title" style="margin:0;">Addons del mundo</div>
+          {#if selectedWorld}<span class="faint small mono">{selectedWorld}</span>{/if}
+        </div>
+        {#if !selectedWorld}
+          <p class="muted small">Selecciona un mundo.</p>
+        {:else if worldPacks && (worldPacks.behavior.length || worldPacks.resource.length)}
+          {@render group('Behavior packs', worldPacks.behavior, 'behavior')}
+          {@render group('Resource packs', worldPacks.resource, 'resource')}
+          <p class="faint small note2">
+            El orden define la prioridad: los de abajo se aplican por encima de los de arriba.
+          </p>
+        {:else}
+          <p class="muted small">Este mundo no tiene addons todavía.</p>
         {/if}
       </div>
     </section>
@@ -416,8 +480,7 @@
     padding-top: 10px;
     border-top: 1px solid var(--border);
   }
-  .result-row,
-  .inst-row {
+  .result-row {
     display: flex;
     align-items: center;
     gap: 9px;
@@ -425,12 +488,66 @@
     border-bottom: 1px solid var(--border);
     font-size: 13px;
   }
-  .inst-row {
-    justify-content: space-between;
-  }
-  .result-row:last-child,
-  .inst-row:last-child {
+  .result-row:last-child {
     border-bottom: none;
+  }
+  .group {
+    margin-top: 12px;
+  }
+  .group-title {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+  .wp-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .wp-row:last-child {
+    border-bottom: none;
+  }
+  .order {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .ord {
+    width: 22px;
+    height: 16px;
+    line-height: 1;
+    font-size: 9px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-muted);
+    border-radius: 4px;
+  }
+  .ord:hover:not(:disabled) {
+    background: #2b313d;
+    color: var(--text);
+  }
+  .ord:disabled {
+    opacity: 0.35;
+  }
+  .wp-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .orphan {
+    font-size: 10px;
+    color: var(--warning);
+    border: 1px solid var(--warning);
+    border-radius: 999px;
+    padding: 0 6px;
+    margin-left: 6px;
+  }
+  .note2 {
+    margin: 12px 0 0;
   }
   .status {
     font-size: 11px;

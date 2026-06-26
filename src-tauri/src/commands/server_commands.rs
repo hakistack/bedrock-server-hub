@@ -187,6 +187,21 @@ pub fn set_auto_restart(
     )
 }
 
+/// Currently-connected players for a server (from console-log tracking).
+#[tauri::command]
+pub fn get_online_players(
+    state: State<AppState>,
+    server_id: String,
+) -> Vec<crate::models::player::Player> {
+    state
+        .players
+        .lock()
+        .unwrap()
+        .get(&server_id)
+        .cloned()
+        .unwrap_or_default()
+}
+
 /// Send a raw console command to a running server's stdin.
 #[tauri::command]
 pub fn send_server_command(

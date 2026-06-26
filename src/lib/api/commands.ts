@@ -5,6 +5,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import type {
   BedrockServer,
   LogLine,
+  ServerMetrics,
   ServerSettings,
   ServerStatus,
   StatusEvent,
@@ -14,13 +15,24 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 
 import type { PropertyEntry, PropertyUpdate } from '$lib/types/properties';
 import type { World } from '$lib/types/world';
-import type { BackupProgress, BackupRecord, RestoreOptions } from '$lib/types/backup';
+import type {
+  BackupProgress,
+  BackupRecord,
+  BackupSchedule,
+  RestoreOptions,
+} from '$lib/types/backup';
+import type { Player, PlayerEvent } from '$lib/types/player';
 import type {
   DownloadProgress,
   DownloadedServerPackage,
   ServerDownloadOption,
 } from '$lib/types/download';
-import type { AddonInstallReport, AddonPackage, InstalledAddon } from '$lib/types/addon';
+import type {
+  AddonInstallReport,
+  AddonPackage,
+  InstalledAddon,
+  WorldPacks,
+} from '$lib/types/addon';
 import type { NetworkStatus } from '$lib/types/network';
 import type { UpdateInfo, UpdateProgress } from '$lib/types/update';
 
@@ -107,6 +119,9 @@ export const api = {
   setAutoRestart: (serverId: string, enabled: boolean) =>
     invoke<void>('set_auto_restart', { serverId, enabled }),
 
+  getOnlinePlayers: (serverId: string) =>
+    invoke<Player[]>('get_online_players', { serverId }),
+
   sendServerCommand: (serverId: string, command: string) =>
     invoke<void>('send_server_command', { serverId, command }),
 
@@ -135,6 +150,12 @@ export const api = {
     invoke<BackupRecord>('restore_backup', { backupId, options }),
 
   deleteBackup: (backupId: string) => invoke<void>('delete_backup', { backupId }),
+
+  getBackupSchedule: (serverId: string) =>
+    invoke<BackupSchedule>('get_backup_schedule', { serverId }),
+
+  setBackupSchedule: (serverId: string, schedule: BackupSchedule) =>
+    invoke<void>('set_backup_schedule', { serverId, schedule }),
 
   // --- Official server downloader (Create Server wizard) ---
   getOfficialDownloadOptions: () =>
@@ -196,6 +217,17 @@ export const api = {
   uninstallAddon: (serverId: string, worldName: string, uuid: string) =>
     invoke<boolean>('uninstall_addon', { serverId, worldName, uuid }),
 
+  listWorldPacks: (serverId: string, worldName: string) =>
+    invoke<WorldPacks>('list_world_packs', { serverId, worldName }),
+
+  reorderWorldPacks: (
+    serverId: string,
+    worldName: string,
+    packType: 'behavior' | 'resource',
+    orderedUuids: string[],
+  ) =>
+    invoke<WorldPacks>('reorder_world_packs', { serverId, worldName, packType, orderedUuids }),
+
   // --- Network / firewall ---
   getNetworkStatus: (serverId: string) =>
     invoke<NetworkStatus>('get_network_status', { serverId }),
@@ -240,4 +272,14 @@ export function onServerLog(handler: (log: LogLine) => void): Promise<UnlistenFn
 /** Subscribe to server status transitions. */
 export function onServerStatus(handler: (status: StatusEvent) => void): Promise<UnlistenFn> {
   return listen<StatusEvent>('server://status', (event) => handler(event.payload));
+}
+
+/** Subscribe to server CPU/RAM metrics samples. */
+export function onServerMetrics(handler: (m: ServerMetrics) => void): Promise<UnlistenFn> {
+  return listen<ServerMetrics>('server://metrics', (event) => handler(event.payload));
+}
+
+/** Subscribe to player connect/disconnect events. */
+export function onPlayerEvent(handler: (e: PlayerEvent) => void): Promise<UnlistenFn> {
+  return listen<PlayerEvent>('server://player', (event) => handler(event.payload));
 }
