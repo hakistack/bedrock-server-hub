@@ -198,4 +198,13 @@ Minecraft and related names are trademarks of their respective owners.
 
 ## License
 
-License information has not been defined yet.
+Bedrock Server Manager is free software: you can redistribute it and/or modify
+it under the terms of the **GNU General Public License v3.0** as published by the
+Free Software Foundation. This program is distributed WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+PURPOSE. See the [LICENSE](./LICENSE) file for the full text.
+
+Copyright (C) 2026 hakistack
+
+> Under the GPL-3.0, any distributed derivative work must also be released under
+> the GPL-3.0 with its source code available.
